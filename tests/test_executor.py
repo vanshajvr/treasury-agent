@@ -66,7 +66,7 @@ class FakeClient:
         self.calls.append(("POST", path, body))
         if path.endswith("/conversions/create"):
             self.bal[body["buy_currency"]] += float(body["buy_amount"])
-            self.bal["USD"] -= float(body["buy_amount"]) * self.rate_of[body["buy_currency"]]
+            self.bal["USD"] -= float(body["buy_amount"]) * self.rate_of[body["buy_currency"]] * self.mult
         return {"id": "c1"}
 
 
@@ -171,3 +171,15 @@ def test_resume_after_crash_keeps_original_balance_snapshot(tmp_path):
     r = ex2.execute(ob, p.decisions["freight"])
     assert r.status == "PAID_SIM" and r.detail["reconciliation"]["ok"] is True
     assert len(c.transfers) == 1
+
+
+def test_better_quote_than_plan_is_not_a_reconciliation_error(tmp_path):
+    pol = load_policy(ROOT / "policy.json")
+    s = with_confidence(load_scenario(ROOT / "tests" / "fixtures" / "scenario.json"), "customer_a", 0.9)
+    s.wallets = {"USD": 20000.0, "GBP": 0.0, "EUR": 0.0}
+    p = plan(s, pol)
+    ob = next(o for o in s.obligations if o.id == "freight")
+    c = FakeClient(quote_mult=0.997)          # quote 0.3% better than the planning rate
+    ex = Executor(c, Ledger(tmp_path / "l.json"), {ob.payee: {"beneficiary_id": "b1"}}, dry_run=False)
+    r = ex.execute(ob, p.decisions["freight"])
+    assert r.status == "PAID_SIM" and r.detail["reconciliation"]["ok"] is True

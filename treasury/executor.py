@@ -151,7 +151,7 @@ class Executor:
         else:
             implied = float(q["client_rate"])  # assumed USD per unit; verify on first live run
         drift = abs(implied - planned) / planned
-        self.ledger.update(ob.id, stage="QUOTED", quote_id=q["quote_id"])
+        self.ledger.update(ob.id, stage="QUOTED", quote_id=q["quote_id"], quote_rate=implied)
         return {"planned_rate": round(planned, 6), "quote_rate": round(implied, 6), "drift": round(drift, 6)}
 
     def _convert(self, ob: Obligation, d) -> None:
@@ -195,7 +195,9 @@ class Executor:
         after = self.settled_balances()
         planned = {ob.ccy: d.from_wallet}
         if ob.ccy != BASE:
-            planned[BASE] = d.usd_spent
+            # USD is checked at the rate actually quoted: a better or worse quote is not a planning error
+            qr = self.ledger.entry(ob.id).get("quote_rate")
+            planned[BASE] = d.converted * qr if qr and d.converted > 0 else d.usd_spent
         actual = {c: round(before.get(c, 0.0) - after.get(c, 0.0), 4) for c in planned}
         diff = {c: round(actual[c] - planned[c], 4) for c in planned}
         return {"planned_debit": {c: round(v, 4) for c, v in planned.items()}, "actual_debit": actual,

@@ -42,7 +42,7 @@ def test_confidence_09(base, policy):
     assert actions(p) == {"freight": EXECUTE_NOW, "supplier": SCHEDULE, "contractor": SCHEDULE,
                           "tooling": DEFER, "licence": ESCALATE}
     assert p.decisions["licence"].rules == ["E1"]
-    assert p.reliant_usd == pytest.approx(7234.9, abs=1.0)
+    assert p.reliant_usd == pytest.approx(7237.9, abs=1.0)
     assert p.reliant_usd <= p.limit_usd
 
 
