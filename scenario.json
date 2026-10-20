@@ -1,0 +1,14 @@
+{
+  "mandate": {"USD": 10000, "GBP": 4500, "EUR": 0},
+  "reserve_floor_usd_equiv": 2500,
+  "horizon_hours": 72,
+  "rates": {"USD": 1.0, "GBP": 1.347088, "EUR": 1.134843},
+  "obligations": [
+    {"id": "freight", "payee": "Freight forwarder", "ccy": "GBP", "amount": 4200, "due_h": 24, "criticality": "operations_stop", "method": "LOCAL"},
+    {"id": "supplier", "payee": "EU component supplier", "ccy": "EUR", "amount": 9800, "due_h": 36, "criticality": "time_sensitive", "method": "SWIFT"},
+    {"id": "contractor", "payee": "US contractor", "ccy": "USD", "amount": 4000, "due_h": 60, "criticality": "important", "method": "LOCAL"},
+    {"id": "tooling", "payee": "SaaS vendor", "ccy": "USD", "amount": 1500, "due_h": 48, "criticality": "deferrable", "method": "LOCAL"},
+    {"id": "licence", "payee": "New EU licensor", "ccy": "EUR", "amount": 3000, "due_h": 70, "criticality": "important", "method": "SWIFT", "new_beneficiary": true}
+  ],
+  "expected_receipt": {"id": "customer_a", "payer": "Customer A", "ccy": "USD", "amount": 8000, "due_h": 30, "forecast_confidence": 0.9}
+}
