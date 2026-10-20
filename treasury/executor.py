@@ -8,6 +8,7 @@ after an ambiguous outcome (R4). Nothing here decides amounts: they come from th
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
@@ -37,6 +38,7 @@ class ExecResult:
 STATUSES = ("DRY_RUN_OK", "PAID_SIM", "TRANSFER_CREATED", "UNCONFIRMED", "E4_DRIFT", "NOT_SETTLED",
             "NO_BENEFICIARY", "FAILED", "SKIPPED")
 RECON_TOLERANCE = 0.01  # one cent
+_STATUS_RANK = {"NEW": 0, "SCHEDULED": 1, "PROCESSING": 2, "SENT": 3, "PAID": 4}
 
 
 def money(x: float) -> str:
@@ -82,6 +84,8 @@ class Executor:
         beneficiary_id = self._beneficiary_id(ob)
         if beneficiary_id is None:
             return ExecResult(ob.id, "NO_BENEFICIARY", {"payee": ob.payee})
+        if not self.dry_run and self.ledger.stage(ob.id) in ("NEW", "QUOTED"):
+            self.ledger.update(ob.id, balances_before=bal)  # pre-payment snapshot survives a crash and resume
 
         # conversion leg (only when the planner drew from USD)
         quote_info = {}
@@ -111,7 +115,7 @@ class Executor:
             self._simulate(tid)
             final = self._transfer_status(tid)
             status = "PAID_SIM" if final == "PAID" else "UNCONFIRMED"  # trust the re-read, not the 2xx
-        recon = self._reconcile(ob, d, bal)
+        recon = self._reconcile(ob, d, self.ledger.entry(ob.id).get("balances_before", bal))
         self.ledger.update(ob.id, stage="DONE", final_status=final, reconciliation=recon)
         return ExecResult(ob.id, status, {"transfer_id": tid, "transfer_status": final, "reconciliation": recon, **quote_info})
 
@@ -168,8 +172,19 @@ class Executor:
                                       lookup=lambda r: self._find("/api/v1/transfers", r))
 
     def _simulate(self, transfer_id: str) -> None:
+        """Sandbox only. Idempotent: reads the status first and applies just the missing transitions,
+        so a re-run after a 5xx or a crash never replays one that already happened."""
         for nxt in ("SENT", "PAID"):  # SENT must come before PAID
-            self.c.post(f"/api/v1/simulation/transfers/{transfer_id}/transition", {"next_status": nxt})
+            for _ in range(3):
+                if _STATUS_RANK.get(self._transfer_status(transfer_id) or "", -1) >= _STATUS_RANK[nxt]:
+                    break
+                try:
+                    self.c.post(f"/api/v1/simulation/transfers/{transfer_id}/transition", {"next_status": nxt})
+                    break
+                except AmbiguousResult:
+                    time.sleep(1)  # not money: re-read the status and decide again
+            else:
+                raise AmbiguousResult(f"could not move transfer {transfer_id} to {nxt}")
 
     def _transfer_status(self, transfer_id: str) -> str | None:
         return self.c.get(f"/api/v1/transfers/{transfer_id}").get("status")
