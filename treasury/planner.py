@@ -10,8 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from itertools import combinations
 
-from treasury.models import BASE, CRIT_RANK, Obligation, Scenario
-from treasury.policy import Policy
+from .models import BASE, CRIT_RANK, Obligation, Scenario
+from .policy import Policy
 
 EPS = 1e-6
 MAX_BRUTE = 16  # 2**16 subsets is still instant; beyond that use a solver backend
@@ -74,14 +74,15 @@ def usd_eq(wallets: dict, rates: dict) -> float:
     return sum(v * rates[c] for c, v in wallets.items())
 
 
-def _fee(ob: Obligation, swift_fee: dict) -> float:
-    return swift_fee.get(ob.ccy, 0.0) if ob.method == "SWIFT" else 0.0
+def _fee(ob: Obligation, fees: dict) -> float:
+    """Flat payout fee for this method and currency (0 when none is configured)."""
+    return fees.get(ob.method, {}).get(ob.ccy, 0.0)
 
 
-def _pay(wallets: dict, ob: Obligation, rates: dict, swift_fee: dict, floor: float):
+def _pay(wallets: dict, ob: Obligation, rates: dict, fees: dict, floor: float):
     """Pay one obligation from settled cash. Returns (new_wallets, Draw) or None if infeasible."""
     w = dict(wallets)
-    fee = _fee(ob, swift_fee)
+    fee = _fee(ob, fees)
     need = ob.amount + fee
     if ob.ccy == BASE:
         if w.get(BASE, 0.0) + EPS < need:
@@ -102,13 +103,13 @@ def _pay(wallets: dict, ob: Obligation, rates: dict, swift_fee: dict, floor: flo
     return w, draw
 
 
-def _earmark(wallets: dict, ob: Obligation, rates: dict, swift_fee: dict, floor: float):
+def _earmark(wallets: dict, ob: Obligation, rates: dict, fees: dict, floor: float):
     """Reserve whatever settled cash allows for an item that cannot execute yet.
 
     Returns (new_wallets, reliant_usd): reliant_usd is the part that must come from a forecast receipt.
     """
     w = dict(wallets)
-    need = ob.amount + _fee(ob, swift_fee)
+    need = ob.amount + _fee(ob, fees)
     if ob.ccy == BASE:
         usd_cost = need
     else:
@@ -140,7 +141,7 @@ def simulate(funded: list, wallets: dict, receipts_w: list, rates: dict, policy:
             w[ccy] = w.get(ccy, 0.0) + amt
             continue
         ob = funded[i]
-        res = _pay(w, ob, rates, policy.swift_fee, floor)
+        res = _pay(w, ob, rates, policy.fees, floor)
         if res is None:
             return SimResult(False, w, draws, cost)
         w, d = res
@@ -166,12 +167,12 @@ def _classify(funded: list, settled: dict, rates: dict, policy: Policy, floor: f
     w = dict(settled)
     cls, draws, reliant = {}, {}, {}
     for ob in sorted(funded, key=rank):
-        res = _pay(w, ob, rates, policy.swift_fee, floor)
+        res = _pay(w, ob, rates, policy.fees, floor)
         if res is not None:
             w, d = res
             cls[ob.id], draws[ob.id] = EXECUTE_NOW, d
         else:
-            w, r = _earmark(w, ob, rates, policy.swift_fee, floor)
+            w, r = _earmark(w, ob, rates, policy.fees, floor)
             cls[ob.id], reliant[ob.id] = SCHEDULE, r
     return cls, draws, reliant
 
@@ -228,7 +229,7 @@ def plan(scenario: Scenario, policy: Policy, locked: dict | None = None) -> Plan
                 best = (key, list(subset), sim)
     if best is None:  # unreachable: the k=0 subset is feasible once the locked check passes
         raise ValueError("no feasible funding set")
-    _, subset, plan_sim = best
+    _, subset, plan_sim = best    
     funded_final = locked_obs + subset
     funded_ids = {o.id for o in funded_final}
 

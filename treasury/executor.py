@@ -18,12 +18,14 @@ from .planner import EXECUTE_NOW, Decision
 
 DRIFT_LIMIT = 0.005  # E4: 0.5%
 
+
 class Api(Protocol):
     """What the executor needs from an API client (AirwallexClient, or a fake in tests)."""
     def get(self, path: str, **kw: Any) -> Any: ...
     def post(self, path: str, body: dict, **kw: Any) -> Any: ...
     def post_idempotent(self, path: str, body: dict, request_id: str,
                         lookup: Callable[[str], dict | None]) -> Any: ...
+
 
 @dataclass
 class ExecResult:
@@ -32,8 +34,9 @@ class ExecResult:
     detail: dict = field(default_factory=dict)
 
 
-STATUSES = ("DRY_RUN_OK", "PAID_SIM", "TRANSFER_CREATED", "E4_DRIFT", "NOT_SETTLED",
+STATUSES = ("DRY_RUN_OK", "PAID_SIM", "TRANSFER_CREATED", "UNCONFIRMED", "E4_DRIFT", "NOT_SETTLED",
             "NO_BENEFICIARY", "FAILED", "SKIPPED")
+RECON_TOLERANCE = 0.01  # one cent
 
 
 def money(x: float) -> str:
@@ -103,11 +106,14 @@ class Executor:
             self.ledger.update(ob.id, stage="TRANSFERRED", transfer_id=transfer.get("id"))
         status = "TRANSFER_CREATED"
         tid = transfer.get("id")
+        final = transfer.get("status")
         if self.simulate and tid:
             self._simulate(tid)
-            status = "PAID_SIM"
-        self.ledger.update(ob.id, stage="DONE")
-        return ExecResult(ob.id, status, {"transfer_id": transfer.get("id"), "transfer_status": transfer.get("status"), **quote_info})
+            final = self._transfer_status(tid)
+            status = "PAID_SIM" if final == "PAID" else "UNCONFIRMED"  # trust the re-read, not the 2xx
+        recon = self._reconcile(ob, d, bal)
+        self.ledger.update(ob.id, stage="DONE", final_status=final, reconciliation=recon)
+        return ExecResult(ob.id, status, {"transfer_id": tid, "transfer_status": final, "reconciliation": recon, **quote_info})
 
     # ------------------------------------------------------------ steps
     def _beneficiary_id(self, ob: Obligation) -> str | None:
@@ -164,6 +170,21 @@ class Executor:
     def _simulate(self, transfer_id: str) -> None:
         for nxt in ("SENT", "PAID"):  # SENT must come before PAID
             self.c.post(f"/api/v1/simulation/transfers/{transfer_id}/transition", {"next_status": nxt})
+
+    def _transfer_status(self, transfer_id: str) -> str | None:
+        return self.c.get(f"/api/v1/transfers/{transfer_id}").get("status")
+
+    def _reconcile(self, ob: Obligation, d, before: dict) -> dict:
+        """Compare what the plan said the payout would cost with what the ledger actually shows.
+        Net effect of convert + transfer: obligation-currency wallet -from_wallet, USD wallet -usd_spent."""
+        after = self.settled_balances()
+        planned = {ob.ccy: d.from_wallet}
+        if ob.ccy != BASE:
+            planned[BASE] = d.usd_spent
+        actual = {c: round(before.get(c, 0.0) - after.get(c, 0.0), 4) for c in planned}
+        diff = {c: round(actual[c] - planned[c], 4) for c in planned}
+        return {"planned_debit": {c: round(v, 4) for c, v in planned.items()}, "actual_debit": actual,
+                "diff": diff, "ok": all(abs(v) <= RECON_TOLERANCE for v in diff.values())}
 
     def _find(self, path: str, request_id: str) -> dict | None:
         """R4: has an operation with this request_id already happened? Filter client-side too,

@@ -11,5 +11,6 @@
     "deferrable": 500
   },
   "spread_bps": 100,
-  "swift_fee": {"EUR": 12.85}
+  "swift_fee": {"EUR": 12.85},
+  "local_fee": {"GBP": 2.25}
 }

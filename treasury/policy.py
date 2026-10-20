@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .models import CRIT_RANK
@@ -21,6 +21,12 @@ class Policy:
     penalties: dict    # criticality -> lateness penalty weight
     spread_bps: float
     swift_fee: dict    # currency -> flat fee per SWIFT payout
+    local_fee: dict = field(default_factory=dict)  # currency -> flat fee per LOCAL payout (observed, see POLICY.md)
+
+    @property
+    def fees(self) -> dict:
+        """method -> currency -> flat fee, the table the planner charges against."""
+        return {"SWIFT": self.swift_fee, "LOCAL": self.local_fee}
 
     def tier_for(self, confidence: float) -> Tier:
         for t in self.tiers:
@@ -39,4 +45,5 @@ def load_policy(path: str | Path) -> Policy:
     if missing:
         raise ValueError(f"penalties missing for: {sorted(missing)}")
     return Policy(tiers=tiers, penalties=dict(raw["penalties"]),
-                  spread_bps=float(raw["spread_bps"]), swift_fee=dict(raw.get("swift_fee", {})))
+                  spread_bps=float(raw["spread_bps"]), swift_fee=dict(raw.get("swift_fee", {})),
+                  local_fee=dict(raw.get("local_fee", {})))

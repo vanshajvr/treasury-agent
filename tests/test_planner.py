@@ -42,7 +42,7 @@ def test_confidence_09(base, policy):
     assert actions(p) == {"freight": EXECUTE_NOW, "supplier": SCHEDULE, "contractor": SCHEDULE,
                           "tooling": DEFER, "licence": ESCALATE}
     assert p.decisions["licence"].rules == ["E1"]
-    assert p.reliant_usd == pytest.approx(7231.9, abs=1.0)
+    assert p.reliant_usd == pytest.approx(7234.9, abs=1.0)
     assert p.reliant_usd <= p.limit_usd
 
 
@@ -50,7 +50,7 @@ def test_confidence_06(base, policy):
     p = plan(with_confidence(base, RID, 0.6), policy)
     assert actions(p) == {"freight": EXECUTE_NOW, "supplier": SCHEDULE, "contractor": DEFER,
                           "tooling": DEFER, "licence": ESCALATE}
-    assert p.reliant_usd == pytest.approx(3231.9, abs=1.0)
+    assert p.reliant_usd == pytest.approx(3234.9, abs=1.0)
     assert p.reliant_usd <= p.limit_usd == 4000
 
 
@@ -83,13 +83,14 @@ def test_new_beneficiary_always_escalates_even_with_plenty_of_cash(base, policy)
     assert "would fit" in p.decisions["licence"].reason
 
 
-def test_swift_fee_included_and_local_free(base, policy):
+def test_payout_fees_included_swift_and_observed_local(base, policy):
     p = plan(with_confidence(base, RID, 0.9), policy)
     sup = p.decisions["supplier"].draw
     assert sup.fee == pytest.approx(12.85)
     assert sup.need == pytest.approx(9812.85)
     assert sup.converted == pytest.approx(9812.85)
-    assert p.decisions["freight"].draw.fee == 0 and p.decisions["freight"].draw.converted == 0
+    fr = p.decisions["freight"].draw     # GBP LOCAL: 2.25 observed in the sandbox
+    assert fr.fee == pytest.approx(2.25) and fr.need == pytest.approx(4202.25) and fr.converted == 0
 
 
 def test_receipt_cannot_fund_obligation_due_before_it_lands(base, policy):

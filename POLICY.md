@@ -26,6 +26,10 @@ Every threshold lives in `policy.json` (tiers, penalties, spread, SWIFT fees) or
    their cost that settled cash cannot cover is their *forecast-reliant spend*.
 3. **Gate** with the rules below.
 
+Payout fees: SWIFT is a flat EUR 12.85. LOCAL was observed at GBP 2.25 on a GBP 4,200 sandbox payout (the guide says LOCAL is free);
+only GBP is configured (`local_fee` in `policy.json`), other currencies default to 0 until observed. The executor reconciles planned vs
+actual debits after every payout, so a wrong fee shows up as a mismatch instead of a silent error.
+
 Priority and penalty: `operations_stop` 1,000,000 | `time_sensitive` 50,000 | `important` 10,000 | `deferrable` 500.
 
 ## Forecast confidence tiers
@@ -65,7 +69,7 @@ Currently `treasury/signals.py` is a keyword stub with the same interface the LL
 | 0.4 | EXECUTE_NOW | ESCALATE (E3) | HOLD (R5) | HOLD (R5) | ESCALATE (E1) |
 
 After the receipt settles (demo): supplier and contractor `EXECUTE_NOW`, tooling `DEFER`, licence
-`ESCALATE`; remaining cash about 3,268 USD against a 2,500 floor.
+`ESCALATE`; remaining cash about 3,265 USD against a 2,500 floor.
 
 ## Known simplifications (revisit before the final demo)
 - Conversions are always USD -> obligation currency. Surplus GBP/EUR counts toward the floor but is

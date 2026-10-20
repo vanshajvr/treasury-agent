@@ -12,12 +12,17 @@ BEN = {"freight": {"beneficiary_id": "b1"}, "Supplier": {"beneficiary_id": "b2"}
 
 
 class FakeClient:
-    def __init__(self, usd=10000.0, gbp=10000.0, quote_mult=1.0, lose_transfer_response=False):
+    def __init__(self, usd=10000.0, gbp=10000.0, quote_mult=1.0, lose_transfer_response=False,
+                 local_fee=2.25, final_status="PAID"):
+        self.local_fee = local_fee
+        self.final_status = final_status
         self.bal = {"USD": usd, "GBP": gbp, "EUR": 10000.0}
         self.mult = quote_mult
         self.lose = lose_transfer_response
         self.calls = []
         self.transfers = []
+
+    rate_of = {"GBP": 1.347088, "EUR": 1.134843}
 
     def get(self, path, params=None, **kw):
         self.calls.append(("GET", path))
@@ -25,6 +30,8 @@ class FakeClient:
             return [{"currency": c, "available_amount": v} for c, v in self.bal.items()]
         if path == "/api/v1/transfers":
             return {"items": self.transfers}
+        if path.startswith("/api/v1/transfers/"):
+            return {"id": "t1", "status": self.final_status}
         return {"items": []}
 
     def post(self, path, body, **kw):
@@ -39,6 +46,7 @@ class FakeClient:
         if path.endswith("/transfers/create"):
             self.calls.append(("POST", path, body))
             if not any(t["request_id"] == request_id for t in self.transfers):
+                self.bal[body["source_currency"]] -= body["transfer_amount"] + self.local_fee
                 self.transfers.append({"id": "t1", "request_id": request_id, "status": "PROCESSING"})
             if self.lose:
                 self.lose = False
@@ -47,6 +55,9 @@ class FakeClient:
                 return found
             return self.transfers[-1]
         self.calls.append(("POST", path, body))
+        if path.endswith("/conversions/create"):
+            self.bal[body["buy_currency"]] += float(body["buy_amount"])
+            self.bal["USD"] -= float(body["buy_amount"]) * self.rate_of[body["buy_currency"]]
         return {"id": "c1"}
 
 
@@ -109,3 +120,24 @@ def test_e4_drift_blocks_conversion(tmp_path):
     assert not [x for x in c.calls if len(x) > 1 and "conversions/create" in x[1]]
     ok = Executor(FakeClient(quote_mult=1.003), Ledger(tmp_path / "l2.json"), {ob.payee: {"beneficiary_id": "b1"}}, dry_run=False)
     assert ok.execute(ob, p.decisions["freight"]).status == "PAID_SIM"
+
+
+def test_reconciliation_matches_when_fee_is_modelled(tmp_path):
+    c = FakeClient(local_fee=2.25)
+    s, p, ob, ex = setup(tmp_path, c, dry_run=False)
+    r = ex.execute(ob, p.decisions["freight"])
+    assert r.detail["reconciliation"]["ok"] is True
+    assert r.detail["reconciliation"]["actual_debit"]["GBP"] == pytest.approx(4202.25)
+
+
+def test_reconciliation_flags_an_unmodelled_fee(tmp_path):
+    c = FakeClient(local_fee=5.0)
+    s, p, ob, ex = setup(tmp_path, c, dry_run=False)
+    rec = ex.execute(ob, p.decisions["freight"]).detail["reconciliation"]
+    assert rec["ok"] is False and rec["diff"]["GBP"] == pytest.approx(2.75)
+
+
+def test_status_comes_from_re_reading_the_transfer(tmp_path):
+    c = FakeClient(final_status="PROCESSING")
+    s, p, ob, ex = setup(tmp_path, c, dry_run=False)
+    assert ex.execute(ob, p.decisions["freight"]).status == "UNCONFIRMED"
