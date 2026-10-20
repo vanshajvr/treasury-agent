@@ -13,7 +13,9 @@ BEN = {"freight": {"beneficiary_id": "b1"}, "Supplier": {"beneficiary_id": "b2"}
 
 class FakeClient:
     def __init__(self, usd=10000.0, gbp=10000.0, quote_mult=1.0, lose_transfer_response=False,
-                 local_fee=2.25, final_status="PAID"):
+                 local_fee=2.25, final_status=None, flaky_transition=False):
+        self.tstatus = "SCHEDULED"
+        self.flaky = flaky_transition
         self.local_fee = local_fee
         self.final_status = final_status
         self.bal = {"USD": usd, "GBP": gbp, "EUR": 10000.0}
@@ -31,11 +33,18 @@ class FakeClient:
         if path == "/api/v1/transfers":
             return {"items": self.transfers}
         if path.startswith("/api/v1/transfers/"):
-            return {"id": "t1", "status": self.final_status}
+            return {"id": "t1", "status": self.final_status or self.tstatus}
         return {"items": []}
 
     def post(self, path, body, **kw):
         self.calls.append(("POST", path, body))
+        if "/simulation/" in path:
+            self.tstatus = body["next_status"]
+            if self.flaky:
+                self.flaky = False
+                from treasury.airwallex import AmbiguousResult
+                raise AmbiguousResult("HTTP 500 after the transition applied")
+            return {}
         if path.endswith("/quotes/create"):
             return {"quote_id": "q1", "buy_amount": body["buy_amount"],
                     "sell_amount": f"{float(body['buy_amount']) * {'GBP': 1.347088, 'EUR': 1.134843}[body['buy_currency']] * self.mult:.4f}"}
@@ -63,7 +72,7 @@ class FakeClient:
 
 def setup(tmp_path, client, **kw):
     pol = load_policy(ROOT / "policy.json")
-    s = with_confidence(load_scenario(ROOT / "scenario.json"), "customer_a", 0.9)
+    s = with_confidence(load_scenario(ROOT / "tests" / "fixtures" / "scenario.json"), "customer_a", 0.9)
     p = plan(s, pol)
     ob = next(o for o in s.obligations if o.id == "freight")
     ex = Executor(client, Ledger(tmp_path / "l.json"), {ob.payee: {"beneficiary_id": "b1"}}, **kw)
@@ -108,7 +117,7 @@ def test_request_id_persisted_and_reused(tmp_path):
 
 def test_e4_drift_blocks_conversion(tmp_path):
     pol = load_policy(ROOT / "policy.json")
-    s = with_confidence(load_scenario(ROOT / "scenario.json"), "customer_a", 0.9)
+    s = with_confidence(load_scenario(ROOT / "tests" / "fixtures" / "scenario.json"), "customer_a", 0.9)
     s.wallets = {"USD": 20000.0, "GBP": 0.0, "EUR": 0.0}  # force a conversion for freight
     p = plan(s, pol)
     ob = next(o for o in s.obligations if o.id == "freight")
@@ -141,3 +150,24 @@ def test_status_comes_from_re_reading_the_transfer(tmp_path):
     c = FakeClient(final_status="PROCESSING")
     s, p, ob, ex = setup(tmp_path, c, dry_run=False)
     assert ex.execute(ob, p.decisions["freight"]).status == "UNCONFIRMED"
+
+
+def test_simulation_500_is_retried_without_replaying_transitions(tmp_path, monkeypatch):
+    monkeypatch.setattr("treasury.executor.time.sleep", lambda s: None)
+    c = FakeClient(flaky_transition=True)
+    s, p, ob, ex = setup(tmp_path, c, dry_run=False)
+    assert ex.execute(ob, p.decisions["freight"]).status == "PAID_SIM"
+    sims = [x[2]["next_status"] for x in c.calls if len(x) > 2 and "/simulation/" in x[1]]
+    assert sims == ["SENT", "PAID"]          # SENT applied once, the 500 did not replay it
+    assert len(c.transfers) == 1
+
+
+def test_resume_after_crash_keeps_original_balance_snapshot(tmp_path):
+    c = FakeClient()
+    s, p, ob, ex = setup(tmp_path, c, dry_run=False, simulate=False)
+    ex.execute(ob, p.decisions["freight"])                 # transfer created, money already debited
+    ex2 = Executor(c, Ledger(tmp_path / "l.json"), {ob.payee: {"beneficiary_id": "b1"}}, dry_run=False, simulate=True)
+    ex2.ledger.update(ob.id, stage="TRANSFERRED")          # as if it crashed before DONE
+    r = ex2.execute(ob, p.decisions["freight"])
+    assert r.status == "PAID_SIM" and r.detail["reconciliation"]["ok"] is True
+    assert len(c.transfers) == 1

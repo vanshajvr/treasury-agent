@@ -3,6 +3,7 @@
   python3 run_live.py --only freight              # DRY RUN (default): reads + quote, moves nothing
   python3 run_live.py --only freight --live       # real sandbox calls, SENT -> PAID simulated
   python3 run_live.py --live                      # every EXECUTE_NOW decision
+  python3 run_live.py --scenario my_test.json ... # experiment without touching scenario.json
 
 Escalated / held / scheduled items are printed and never executed. Re-running is safe: the ledger
 remembers request ids and completed steps.
@@ -19,6 +20,7 @@ from treasury.ledger import Ledger
 
 def main() -> None:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--scenario", default="scenario.json", help="scenario file (copy it for experiments)")
     ap.add_argument("--live", action="store_true", help="actually call mutating endpoints")
     ap.add_argument("--only", nargs="*", help="obligation ids to execute (default: all EXECUTE_NOW)")
     ap.add_argument("--confidence", type=float, help="override forecast confidence")
@@ -26,7 +28,7 @@ def main() -> None:
     a = ap.parse_args()
 
     policy = load_policy("policy.json")
-    s = load_scenario("scenario.json")
+    s = load_scenario(a.scenario)
     if a.confidence is not None:
         s = with_confidence(s, s.receipts[0].id, a.confidence)
     bens = json.loads(Path("beneficiaries.json").read_text()) if Path("beneficiaries.json").exists() else {}

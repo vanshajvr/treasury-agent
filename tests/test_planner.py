@@ -20,7 +20,7 @@ def policy():
 
 @pytest.fixture
 def base():
-    return load_scenario(ROOT / "scenario.json")
+    return load_scenario(ROOT / "tests" / "fixtures" / "scenario.json")
 
 
 def actions(p):
