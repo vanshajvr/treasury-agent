@@ -1,2 +1,4 @@
 .env
 .venv/ledger.json
+.beneficiary.json
+.ledger.json
