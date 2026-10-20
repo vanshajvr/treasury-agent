@@ -27,7 +27,7 @@ class FakeClient:
             return {"items": self.transfers}
         return {"items": []}
 
-    def post(self, path, body):
+    def post(self, path, body, **kw):
         self.calls.append(("POST", path, body))
         if path.endswith("/quotes/create"):
             return {"quote_id": "q1", "buy_amount": body["buy_amount"],
