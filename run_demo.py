@@ -3,8 +3,9 @@
 goal -> initial plan -> new information -> revised decision -> human choice
      -> deposit -> incremental recompute -> execution -> remaining reserve
 """
+from treasury.signals import propose_signal
 from treasury import (apply_deposit, apply_execution, format_plan, load_policy, load_scenario,
-                      plan, propose_confidence, replan, usd_eq, with_confidence)
+                      plan, replan, usd_eq, with_confidence)
 
 EMAIL = ("Hi, our internal approval has been delayed and we won't be able to release the USD 8,000 "
          "payment this week. Likely next month. Sorry for the trouble.")
@@ -37,8 +38,11 @@ print(wallets_line(s1))
 
 banner("3. NEW INFORMATION: customer email arrives")
 print(f'"{EMAIL}"')
-conf, why = propose_confidence(EMAIL, receipt.confidence)
-print(f"\nsignal (stub for the LLM step): confidence {receipt.confidence:.2f} -> {conf:.2f} ({why})")
+sig = propose_signal(EMAIL, receipt.confidence, receipt)
+conf = sig.confidence
+print(f"\nsignal [{sig.source}]: confidence {receipt.confidence:.2f} -> {conf:.2f} ({sig.reason})")
+if sig.evidence:
+    print(f'evidence quoted from the email: "{sig.evidence}"')
 s1 = with_confidence(s1, receipt.id, conf)
 
 banner("4. REVISED DECISION")
