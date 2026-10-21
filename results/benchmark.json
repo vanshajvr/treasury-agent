@@ -1,0 +1,140 @@
+{
+  "n": 2000,
+  "seed": 1000,
+  "summary": {
+    "fifo": {
+      "crit_on_time_pct": 66.79668454412482,
+      "crit_late": 1362,
+      "crit_silent": 1362,
+      "crit_total": 4102,
+      "warn_lead_h": 0.0,
+      "penalty_mean": 256704.0,
+      "penalty_ci": [
+        235947.75,
+        277827.5
+      ],
+      "floor_breach_pct": 69.75,
+      "breach_usd_mean": 943.0766814740201,
+      "cost_mean": 92.4657513216259,
+      "unvetted_per_100": 44.2,
+      "escalations_per_world": 0.0
+    },
+    "convert_upfront": {
+      "crit_on_time_pct": 64.57825450999512,
+      "crit_late": 1453,
+      "crit_silent": 1453,
+      "crit_total": 4102,
+      "warn_lead_h": 0.0,
+      "penalty_mean": 264237.25,
+      "penalty_ci": [
+        243701.5,
+        287639.5
+      ],
+      "floor_breach_pct": 69.2,
+      "breach_usd_mean": 921.1229657954904,
+      "cost_mean": 107.758142626067,
+      "unvetted_per_100": 44.7,
+      "escalations_per_world": 0.0
+    },
+    "priority": {
+      "crit_on_time_pct": 59.45880058508045,
+      "crit_late": 1663,
+      "crit_silent": 1663,
+      "crit_total": 4102,
+      "warn_lead_h": 0.0,
+      "penalty_mean": 305456.25,
+      "penalty_ci": [
+        282301.75,
+        329413.5
+      ],
+      "floor_breach_pct": 0.0,
+      "breach_usd_mean": 0.0,
+      "cost_mean": 81.39944133076044,
+      "unvetted_per_100": 39.95,
+      "escalations_per_world": 0.0
+    },
+    "eager_priority": {
+      "crit_on_time_pct": 89.44417357386641,
+      "crit_late": 433,
+      "crit_silent": 433,
+      "crit_total": 4102,
+      "warn_lead_h": 0.0,
+      "penalty_mean": 43356.75,
+      "penalty_ci": [
+        35867.0,
+        51372.25
+      ],
+      "floor_breach_pct": 0.0,
+      "breach_usd_mean": 0.0,
+      "cost_mean": 80.75161733207153,
+      "unvetted_per_100": 41.0,
+      "escalations_per_world": 0.0
+    },
+    "agent_no_signal": {
+      "crit_on_time_pct": 91.88200877620673,
+      "crit_late": 333,
+      "crit_silent": 24,
+      "crit_total": 4102,
+      "warn_lead_h": 31.447572815533977,
+      "penalty_mean": 33340.75,
+      "penalty_ci": [
+        27326.0,
+        39609.5
+      ],
+      "floor_breach_pct": 0.0,
+      "breach_usd_mean": 0.0,
+      "cost_mean": 77.32640585202154,
+      "unvetted_per_100": 0.0,
+      "escalations_per_world": 0.9655
+    },
+    "agent": {
+      "crit_on_time_pct": 91.88200877620673,
+      "crit_late": 333,
+      "crit_silent": 22,
+      "crit_total": 4102,
+      "warn_lead_h": 32.77138263665595,
+      "penalty_mean": 33338.75,
+      "penalty_ci": [
+        27324.25,
+        39608.25
+      ],
+      "floor_breach_pct": 0.0,
+      "breach_usd_mean": 0.0,
+      "cost_mean": 77.34130398341479,
+      "unvetted_per_100": 0.0,
+      "escalations_per_world": 0.989
+    }
+  },
+  "paired_agent_vs_eager": {
+    "penalty": {
+      "mean_diff": -10018.0,
+      "ci": [
+        -14203.5,
+        -6311.0
+      ],
+      "a_better": 578,
+      "tie": 1183,
+      "a_worse": 239
+    },
+    "crit_late": {
+      "mean_diff": -0.05,
+      "ci": [
+        -0.061,
+        -0.038
+      ],
+      "a_better": 121,
+      "tie": 1859,
+      "a_worse": 20
+    },
+    "cost_usd": {
+      "mean_diff": -3.410313348656734,
+      "ci": [
+        -4.343951182140547,
+        -2.419188084633961
+      ],
+      "a_better": 650,
+      "tie": 1023,
+      "a_worse": 327
+    }
+  }
+}
