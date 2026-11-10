@@ -13,8 +13,9 @@ BEN = {"freight": {"beneficiary_id": "b1"}, "Supplier": {"beneficiary_id": "b2"}
 
 class FakeClient:
     def __init__(self, usd=10000.0, gbp=10000.0, quote_mult=1.0, lose_transfer_response=False,
-                 local_fee=2.25, final_status=None, flaky_transition=False):
+                 local_fee=2.25, final_status=None, flaky_transition=False, failure=None):
         self.tstatus = "SCHEDULED"
+        self.failure = failure      # e.g. {"status": "FAILED", "failure_type": ..., "failure_reason": ...}
         self.flaky = flaky_transition
         self.local_fee = local_fee
         self.final_status = final_status
@@ -33,6 +34,8 @@ class FakeClient:
         if path == "/api/v1/transfers":
             return {"items": self.transfers}
         if path.startswith("/api/v1/transfers/"):
+            if self.failure:
+                return {"id": "t1", **self.failure}
             return {"id": "t1", "status": self.final_status or self.tstatus}
         return {"items": []}
 
@@ -55,7 +58,8 @@ class FakeClient:
         if path.endswith("/transfers/create"):
             self.calls.append(("POST", path, body))
             if not any(t["request_id"] == request_id for t in self.transfers):
-                self.bal[body["source_currency"]] -= body["transfer_amount"] + self.local_fee
+                if not self.failure:    # a failed payout leaves (or returns) the money in the wallet
+                    self.bal[body["source_currency"]] -= body["transfer_amount"] + self.local_fee
                 self.transfers.append({"id": "t1", "request_id": request_id, "status": "PROCESSING"})
             if self.lose:
                 self.lose = False
@@ -183,3 +187,66 @@ def test_better_quote_than_plan_is_not_a_reconciliation_error(tmp_path):
     ex = Executor(c, Ledger(tmp_path / "l.json"), {ob.payee: {"beneficiary_id": "b1"}}, dry_run=False)
     r = ex.execute(ob, p.decisions["freight"])
     assert r.status == "PAID_SIM" and r.detail["reconciliation"]["ok"] is True
+
+FAILED = {"status": "FAILED", "failure_type": "BENEFICIARY_ACCOUNT_INVALID", "failure_reason": "account closed"}
+
+
+def transfer_posts(c):
+    return [x for x in c.calls if len(x) > 2 and x[1].endswith("/transfers/create")]
+
+
+@pytest.mark.parametrize("state", ["FAILED", "CANCELLED"])  # Airwallex auto-cancels FAILED: a slow poll sees CANCELLED
+def test_failed_or_cancelled_transfer_is_parked_with_its_reason(tmp_path, state):
+    c = FakeClient(failure={**FAILED, "status": state})
+    s, p, ob, ex = setup(tmp_path, c, dry_run=False)
+    r = ex.execute(ob, p.decisions["freight"])
+    assert r.status == "TRANSFER_FAILED" and r.detail["transfer_status"] == state
+    assert r.detail["failure_reason"] == "account closed" and "person" in r.detail["next"]
+    assert ex.ledger.stage(ob.id) == "FAILED"
+    assert not [x for x in c.calls if len(x) > 2 and "/simulation/" in x[1]]   # no transitions on a dead transfer
+
+
+def test_failed_transfer_is_never_retried_automatically(tmp_path):
+    c = FakeClient(failure=FAILED)
+    s, p, ob, ex = setup(tmp_path, c, dry_run=False)
+    ex.execute(ob, p.decisions["freight"])
+    c.failure = None                                          # even if the cause is fixed...
+    assert ex.execute(ob, p.decisions["freight"]).status == "TRANSFER_FAILED"   # ...no silent retry
+    assert len(transfer_posts(c)) == 1
+
+
+def test_released_failure_retries_once_with_a_fresh_request_id(tmp_path):
+    c = FakeClient(failure=FAILED)
+    s, p, ob, ex = setup(tmp_path, c, dry_run=False)
+    ex.execute(ob, p.decisions["freight"])
+    first_rid = transfer_posts(c)[0][2]["request_id"]
+    c.failure = None
+    ex.release_failed(ob.id, approved_by="treasury lead")
+    assert ex.execute(ob, p.decisions["freight"]).status == "PAID_SIM"
+    assert transfer_posts(c)[-1][2]["request_id"] != first_rid
+    hist = ex.ledger.entry(ob.id)["failed_attempts"]
+    assert hist[0]["transfer_request_id"] == first_rid and hist[0]["released_by"] == "treasury lead"
+
+
+def test_release_after_conversion_does_not_convert_twice(tmp_path):
+    pol = load_policy(ROOT / "policy.json")
+    s = with_confidence(load_scenario(ROOT / "tests" / "fixtures" / "scenario.json"), "customer_a", 0.9)
+    s.wallets = {"USD": 20000.0, "GBP": 0.0, "EUR": 0.0}       # freight needs a USD -> GBP conversion
+    p = plan(s, pol)
+    ob = next(o for o in s.obligations if o.id == "freight")
+    c = FakeClient(gbp=0.0, failure=FAILED)
+    ex = Executor(c, Ledger(tmp_path / "l.json"), {ob.payee: {"beneficiary_id": "b1"}}, dry_run=False)
+    r = ex.execute(ob, p.decisions["freight"])
+    assert r.status == "TRANSFER_FAILED" and "stays in the GBP wallet" in r.detail["funds_note"]
+    c.failure = None
+    ex.release_failed(ob.id, approved_by="treasury lead")
+    assert ex.execute(ob, p.decisions["freight"]).status == "PAID_SIM"
+    assert len([x for x in c.calls if len(x) > 1 and x[1].endswith("/conversions/create")]) == 1
+
+
+def test_only_a_failed_payout_can_be_released(tmp_path):
+    c = FakeClient()
+    s, p, ob, ex = setup(tmp_path, c, dry_run=False)
+    ex.execute(ob, p.decisions["freight"])
+    with pytest.raises(ValueError):
+        ex.release_failed(ob.id, approved_by="x")

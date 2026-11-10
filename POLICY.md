@@ -10,9 +10,14 @@ Every threshold lives in `policy.json` (tiers, penalties, spread, SWIFT fees) or
 - **R2 Reserve floor.** Total cash (USD equivalent) never drops below the floor after any payment,
   even with human approval.
 - **R3 Idempotency.** Every mutating API call gets its own `request_id`, stored before the call.
-  Retries reuse it. An FX quote is booked once. *(executor stage, not in the offline core yet)*
+  Retries reuse it. An FX quote is booked once. *(executor stage)*
 - **R4 Ambiguous errors.** After a timeout or unclear response, query the list endpoint for that
   `request_id` before retrying. *(executor stage)*
+- **R6 Failed payouts.** A transfer that ends `FAILED` or `CANCELLED` (Airwallex auto-cancels a failed
+  transfer, so a slow poll may only see `CANCELLED`) is parked with its `failure_type` and
+  `failure_reason` and escalated. It is never retried automatically. After a person releases it, the
+  next attempt is a new transfer with a fresh `request_id`; a conversion that already settled is not
+  repeated. *(executor stage)*
 - **R5 Hold.** While a more critical obligation is escalated under E3, less critical items that
   could run now are `HOLD`, so cash a person may want to redirect is not spent.
 

@@ -4,6 +4,12 @@ Per obligation:  settled-cash check (R1) -> quote + drift check (E4) -> conversi
                  -> transfer -> (sandbox only) simulate SENT then PAID.
 Every mutating call uses a request_id stored in the ledger first (R3) and is looked up, not resent,
 after an ambiguous outcome (R4). Nothing here decides amounts: they come from the planner's Draw.
+
+A transfer that ends FAILED or CANCELLED (Airwallex auto-cancels a FAILED transfer, so a slow poll may only
+see CANCELLED) is recorded with its failure_type and failure_reason and parked in ledger stage FAILED.
+It is never retried automatically: a person reviews it and calls `release_failed`, which archives the
+attempt so the next run creates a NEW transfer with a fresh request_id (the old one belongs to a finished
+operation and would be rejected as duplicate_request_id).
 """
 from __future__ import annotations
 
@@ -36,7 +42,8 @@ class ExecResult:
 
 
 STATUSES = ("DRY_RUN_OK", "PAID_SIM", "TRANSFER_CREATED", "UNCONFIRMED", "E4_DRIFT", "NOT_SETTLED",
-            "NO_BENEFICIARY", "FAILED", "SKIPPED")
+            "NO_BENEFICIARY", "TRANSFER_FAILED", "SKIPPED")
+FAILED_STATES = ("FAILED", "CANCELLED")  # terminal: the payout did not happen
 RECON_TOLERANCE = 0.01  # one cent
 _STATUS_RANK = {"NEW": 0, "SCHEDULED": 1, "PROCESSING": 2, "SENT": 3, "PAID": 4}
 
@@ -72,14 +79,24 @@ class Executor:
             return ExecResult(ob.id, "SKIPPED", {"why": f"action is {decision.action}"})
         if self.ledger.stage(ob.id) == "DONE":
             return ExecResult(ob.id, "SKIPPED", {"why": "already completed in ledger"})
+        if self.ledger.stage(ob.id) == "FAILED":  # never auto-retried: a person must release it first
+            return ExecResult(ob.id, "TRANSFER_FAILED", self._failure_detail(ob.id, "parked until a person releases it"))
         d = decision.draw
 
         # R1: re-verify against SETTLED balances right now, not the plan's snapshot
         bal = self.settled_balances()
-        if d.from_wallet > bal.get(ob.ccy, 0.0) + 1e-6:
-            return ExecResult(ob.id, "NOT_SETTLED", {"needed": d.from_wallet, "available": bal.get(ob.ccy, 0.0), "ccy": ob.ccy})
-        if d.usd_spent > bal.get(BASE, 0.0) + 1e-6:
-            return ExecResult(ob.id, "NOT_SETTLED", {"needed": d.usd_spent, "available": bal.get(BASE, 0.0), "ccy": BASE})
+        if self.ledger.stage(ob.id) == "TRANSFERRED":
+            pass  # transfer already created and the wallet already debited: only confirmation is left
+        elif self.ledger.stage(ob.id) == "CONVERTED":
+            # conversion already booked: the whole payout must now sit in the obligation-currency wallet
+            need = d.from_wallet + d.converted
+            if need > bal.get(ob.ccy, 0.0) + 1e-6:
+                return ExecResult(ob.id, "NOT_SETTLED", {"needed": need, "available": bal.get(ob.ccy, 0.0), "ccy": ob.ccy})
+        else:
+            if d.from_wallet > bal.get(ob.ccy, 0.0) + 1e-6:
+                return ExecResult(ob.id, "NOT_SETTLED", {"needed": d.from_wallet, "available": bal.get(ob.ccy, 0.0), "ccy": ob.ccy})
+            if d.usd_spent > bal.get(BASE, 0.0) + 1e-6:
+                return ExecResult(ob.id, "NOT_SETTLED", {"needed": d.usd_spent, "available": bal.get(BASE, 0.0), "ccy": BASE})
 
         beneficiary_id = self._beneficiary_id(ob)
         if beneficiary_id is None:
@@ -115,6 +132,8 @@ class Executor:
             self._simulate(tid)
             final = self._transfer_status(tid)
             status = "PAID_SIM" if final == "PAID" else "UNCONFIRMED"  # trust the re-read, not the 2xx
+        if final in FAILED_STATES:
+            return self._park_failed(ob, d, tid, quote_info)
         recon = self._reconcile(ob, d, self.ledger.entry(ob.id).get("balances_before", bal))
         self.ledger.update(ob.id, stage="DONE", final_status=final, reconciliation=recon)
         return ExecResult(ob.id, status, {"transfer_id": tid, "transfer_status": final, "reconciliation": recon, **quote_info})
@@ -176,7 +195,10 @@ class Executor:
         so a re-run after a 5xx or a crash never replays one that already happened."""
         for nxt in ("SENT", "PAID"):  # SENT must come before PAID
             for _ in range(3):
-                if _STATUS_RANK.get(self._transfer_status(transfer_id) or "", -1) >= _STATUS_RANK[nxt]:
+                current = self._transfer_status(transfer_id) or ""
+                if current in FAILED_STATES:
+                    return  # terminal: nothing left to simulate, the caller records the failure
+                if _STATUS_RANK.get(current, -1) >= _STATUS_RANK[nxt]:
                     break
                 try:
                     self.c.post(f"/api/v1/simulation/transfers/{transfer_id}/transition", {"next_status": nxt})
@@ -187,7 +209,39 @@ class Executor:
                 raise AmbiguousResult(f"could not move transfer {transfer_id} to {nxt}")
 
     def _transfer_status(self, transfer_id: str) -> str | None:
-        return self.c.get(f"/api/v1/transfers/{transfer_id}").get("status")
+        return self._transfer_read(transfer_id).get("status")
+
+    def _transfer_read(self, transfer_id: str) -> dict:
+        return self.c.get(f"/api/v1/transfers/{transfer_id}") or {}
+
+    # ------------------------------------------------------------ failed payouts
+    def _park_failed(self, ob: Obligation, d, transfer_id: str | None, quote_info: dict) -> ExecResult:
+        t = self._transfer_read(transfer_id) if transfer_id else {}
+        note = (f"converted {ob.ccy} {money(d.converted)} stays in the {ob.ccy} wallet; re-plan before retrying"
+                if d.converted > 1e-9 else "no conversion was made")
+        self.ledger.update(ob.id, stage="FAILED", final_status=t.get("status", "FAILED"),
+                           failure_type=t.get("failure_type"), failure_reason=t.get("failure_reason"),
+                           funds_note=note, balances_after=self.settled_balances())
+        return ExecResult(ob.id, "TRANSFER_FAILED", {**self._failure_detail(ob.id, "escalate to a person"), **quote_info})
+
+    def _failure_detail(self, obligation_id: str, next_step: str) -> dict:
+        e = self.ledger.entry(obligation_id)
+        return {"transfer_id": e.get("transfer_id"), "transfer_status": e.get("final_status"),
+                "failure_type": e.get("failure_type"), "failure_reason": e.get("failure_reason"),
+                "funds_note": e.get("funds_note"), "next": next_step}
+
+    def release_failed(self, obligation_id: str, approved_by: str) -> None:
+        """A person reviewed a failed payout (e.g. fixed the beneficiary) and approves one new attempt.
+        The failed attempt is archived; the next execute() creates a new transfer under a fresh request_id
+        and does not repeat a conversion that already settled."""
+        e = self.ledger.entry(obligation_id)
+        if e["stage"] != "FAILED":
+            raise ValueError(f"{obligation_id} is in stage {e['stage']}, not FAILED")
+        attempt = {k: e.pop(k, None) for k in ("transfer_id", "transfer_request_id", "final_status",
+                                               "failure_type", "failure_reason", "funds_note", "balances_after")}
+        history = e.get("failed_attempts", []) + [{**attempt, "released_by": approved_by}]
+        stage = "CONVERTED" if e.get("conversion_id") else "NEW"
+        self.ledger.update(obligation_id, stage=stage, failed_attempts=history)
 
     def _reconcile(self, ob: Obligation, d, before: dict) -> dict:
         """Compare what the plan said the payout would cost with what the ledger actually shows.

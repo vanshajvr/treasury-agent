@@ -39,6 +39,11 @@ def run_batch(ex, s, p, policy, only, dry):
                 print(f"{ob.id}: ESCALATE (E4) - quote still differs from planning rate; a person must approve")
                 continue
         print(f"{ob.id}: {r.status} {json.dumps(r.detail)}")
+        if r.status == "TRANSFER_FAILED":
+            print(f"{ob.id}: ESCALATE - transfer {r.detail.get('transfer_status')} "
+                  f"({r.detail.get('failure_type')}: {r.detail.get('failure_reason')}); {r.detail.get('funds_note')}. "
+                  f"Not retried: a person must call Executor.release_failed after fixing the cause")
+            continue
         rec = r.detail.get("reconciliation")
         if rec and not rec["ok"]:
             print(f"{ob.id}: RECONCILIATION MISMATCH planned {rec['planned_debit']} actual {rec['actual_debit']} "
