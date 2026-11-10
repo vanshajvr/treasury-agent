@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Treasury Controller Demo</title>
+<meta name="description" content="An agent that runs multi-currency cash on Airwallex. The model reads email; code moves money.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Lora:ital,wght@0,500;0,600;1,500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #f7f7f5; --surface: #ffffff; --surface-2: #f0efec; --border: #e2e0db;
+  --text: #1c1b19; --muted: #6b6862; --accent: #4f46e5; --accent-soft: #eceafd;
+  --green: #15803d; --green-soft: #e3f4e8; --blue: #1d4ed8; --blue-soft: #e4ebfc;
+  --amber: #a16207; --amber-soft: #fbf0d9; --red: #b91c1c; --red-soft: #fbe5e5;
+  --gray: #57534e; --gray-soft: #ecebe8; --mark: #fde68a; --mark-text: #1c1b19;
+  --shadow: 0 1px 2px rgba(0,0,0,.04), 0 2px 8px rgba(0,0,0,.04);
+  --serif: "Lora", ui-serif, Georgia, serif;
+  --sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121211; --surface: #1b1b1a; --surface-2: #242422; --border: #33322f;
+    --text: #ecebe8; --muted: #a19e97; --accent: #a5b4fc; --accent-soft: #272a45;
+    --green: #4ade80; --green-soft: #15291c; --blue: #93b4fd; --blue-soft: #1a2442;
+    --amber: #fbbf24; --amber-soft: #33270d; --red: #f87171; --red-soft: #3a1717;
+    --gray: #b8b5ae; --gray-soft: #2a2927; --mark: #854d0e; --mark-text: #fef3c7;
+    --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #121211; --surface: #1b1b1a; --surface-2: #242422; --border: #33322f;
+  --text: #ecebe8; --muted: #a19e97; --accent: #a5b4fc; --accent-soft: #272a45;
+  --green: #4ade80; --green-soft: #15291c; --blue: #93b4fd; --blue-soft: #1a2442;
+  --amber: #fbbf24; --amber-soft: #33270d; --red: #f87171; --red-soft: #3a1717;
+  --gray: #b8b5ae; --gray-soft: #2a2927; --mark: #854d0e; --mark-text: #fef3c7;
+  --shadow: none;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.6 var(--sans); font-feature-settings: "cv11", "ss01"; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+h1, h2, h3, .tile .v, .conf .big, .side h3 { font-family: var(--serif); font-weight: 600; letter-spacing: -.01em; }
+.tile .v.num, .conf .big.num { font-variant-numeric: proportional-nums lining-nums; letter-spacing: -.02em; }
+.num, table, .gauge-label, .money { font-variant-numeric: tabular-nums; }
+a { color: var(--accent); }
+.wrap { max-width: 1320px; margin: 0 auto; padding: 0 16px; }
+header.top { padding: 40px 0 8px; }
+.eyebrow { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 6px; }
+h1 { font-size: clamp(30px, 4.5vw, 44px); line-height: 1.1; margin: 0 0 12px; }
+.lede { font-size: 17px; color: var(--muted); max-width: 760px; margin: 0; }
+.lede strong { color: var(--text); font-weight: 600; }
+h2 { font-size: 26px; margin: 0 0 4px; }
+.sub { color: var(--muted); margin: 0 0 16px; }
+section { padding: 28px 0; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); }
+
+/* stat tiles */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 24px; }
+.tile { padding: 14px 16px; }
+.tile .k { font-size: 14px; color: var(--text); }
+.tile .v { font-size: 36px; line-height: 1.15; margin: 2px 0 4px; }
+.tile .d { font-size: 13px; color: var(--muted); }
+
+/* replay layout */
+.replay-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+@media (min-width: 1180px) { .replay-grid { grid-template-columns: minmax(0, 1fr) 340px; } }
+.controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.seg { display: inline-flex; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 3px; }
+.seg button { border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 14px; padding: 6px 12px; border-radius: 7px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow); font-weight: 600; }
+.nav { display: flex; gap: 8px; align-items: center; }
+.btn { border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; font-size: 14px;
+  padding: 7px 14px; border-radius: 8px; cursor: pointer; }
+.btn:hover:not(:disabled) { border-color: var(--accent); }
+.btn:disabled { opacity: .4; cursor: default; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--surface); font-weight: 600; }
+.counter { font-size: 13px; color: var(--muted); min-width: 64px; text-align: center; }
+
+.steps { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 14px; scrollbar-width: thin; }
+.steps button { flex: 0 0 auto; border: 1px solid var(--border); background: var(--surface); color: var(--muted); font: inherit;
+  font-size: 13px; padding: 5px 10px; border-radius: 999px; cursor: pointer; white-space: nowrap; }
+.steps button.done { color: var(--text); }
+.steps button[aria-current="step"] { background: var(--text); color: var(--bg); border-color: var(--text); }
+
+.stage { padding: 20px; }
+.stage-head h3 { font-size: 24px; margin: 0 0 6px; }
+.stage-head p { margin: 0; color: var(--muted); max-width: 820px; }
+.panel { margin-top: 16px; padding: 14px 16px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); }
+.panel h4 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.email { font-family: var(--serif); font-style: italic; font-weight: 500; font-size: 17px; line-height: 1.65; margin: 0; }
+mark { background: var(--mark); color: var(--mark-text); padding: 0 2px; border-radius: 3px; }
+.conf { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; font-size: 14px; }
+.conf .big { font-size: 26px; }
+.tag { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--gray-soft); color: var(--gray); font-weight: 600; }
+.reject { display: flex; gap: 10px; align-items: flex-start; margin: 6px 0; font-size: 14px; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; word-break: break-all; }
+
+/* cash gauge */
+.gauge { margin-top: 16px; }
+.gauge-bar { position: relative; height: 14px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; overflow: visible; }
+.gauge-fill { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: 999px; transition: width .45s ease; }
+.gauge-floor { position: absolute; top: -5px; bottom: -5px; width: 2px; background: var(--red); }
+.gauge-label { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; color: var(--muted); margin-top: 6px; }
+.gauge-label strong { color: var(--text); }
+
+/* obligations board */
+.board { margin-top: 16px; display: grid; gap: 8px; }
+.ob { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; padding: 12px 14px; border: 1px solid var(--border);
+  border-radius: 10px; background: var(--surface); transition: border-color .3s, box-shadow .3s; }
+.ob.changed { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.ob .name { font-weight: 600; }
+.ob .meta { font-size: 13px; color: var(--muted); }
+.ob .right { text-align: right; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.ob .why { grid-column: 1 / -1; font-size: 13px; color: var(--muted); }
+.ob .why .was { color: var(--accent); font-weight: 600; }
+.ob ul { grid-column: 1 / -1; margin: 2px 0 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
+.chip { font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+.a-EXECUTE_NOW, .a-PAID { background: var(--green-soft); color: var(--green); }
+.a-SCHEDULE_ON_DEPOSIT { background: var(--blue-soft); color: var(--blue); }
+.a-HOLD { background: var(--amber-soft); color: var(--amber); }
+.a-DEFER, .a-OPEN { background: var(--gray-soft); color: var(--gray); }
+.a-ESCALATE { background: var(--red-soft); color: var(--red); }
+.crit { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.crit.hot { color: var(--red); }
+.rules { font-size: 11px; color: var(--muted); }
+
+/* sidebar */
+.side { align-self: start; position: sticky; top: 16px; padding: 16px; }
+.side h3 { margin: 0 0 2px; font-size: 19px; }
+.side .sub { font-size: 13px; margin-bottom: 12px; }
+.bars { display: grid; gap: 12px; }
+.bar-row .lbl { display: flex; justify-content: space-between; font-size: 13px; }
+.bar-row .lbl span:last-child { font-weight: 600; }
+.bar-track { height: 8px; background: var(--surface-2); border-radius: 999px; margin-top: 4px; overflow: hidden; }
+.bar-val { height: 100%; background: var(--gray); border-radius: 999px; }
+.bar-row.me .bar-val { background: var(--accent); }
+.bar-row.me .lbl { color: var(--accent); }
+.side hr { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
+.side dl { margin: 0; display: grid; grid-template-columns: auto auto; gap: 6px 12px; font-size: 13px; }
+.side dt { color: var(--muted); }
+.side dd { margin: 0; text-align: right; font-weight: 600; }
+
+/* tables */
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { padding: 10px 12px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; white-space: normal; min-width: 180px; }
+th { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 600; }
+tr.me td { background: var(--accent-soft); font-weight: 600; }
+.ci { color: var(--muted); font-size: 12px; font-weight: 400; }
+.note { font-size: 14px; color: var(--muted); max-width: 900px; }
+
+/* architecture */
+.flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; align-items: stretch; }
+.node { padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); position: relative; }
+.node b { display: block; font-size: 14px; }
+.node span { font-size: 13px; color: var(--muted); }
+.node.model { border-style: dashed; }
+.node.model b::after { content: " · model"; color: var(--amber); font-weight: 600; font-size: 12px; }
+.node.code b::after { content: " · code"; color: var(--green); font-weight: 600; font-size: 12px; }
+.rulegrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px; margin-top: 16px; }
+.rule { padding: 10px 12px; border-radius: 10px; background: var(--surface); border: 1px solid var(--border); font-size: 14px; }
+.rule b { color: var(--accent); margin-right: 6px; }
+footer { padding: 24px 0 48px; color: var(--muted); font-size: 13px; }
+.kbd { font-family: ui-monospace, monospace; font-size: 12px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; }
+@media (max-width: 640px) {
+  .stage { padding: 14px; }
+  .ob { grid-template-columns: 1fr; }
+  .ob .right { align-items: flex-start; text-align: left; flex-direction: row; flex-wrap: wrap; }
+}
+details > summary { cursor: pointer; list-style: none; color: var(--muted); font-size: 13px; user-select: none; }
+details > summary::-webkit-details-marker { display: none; }
+details > summary::before { content: "▸ "; }
+details[open] > summary::before { content: "▾ "; }
+details > summary:hover { color: var(--accent); }
+.ob details { grid-column: 1 / -1; }
+.ob details > div, .ob details ul { font-size: 13px; color: var(--muted); margin-top: 6px; }
+.ob details ul { padding-left: 18px; margin-bottom: 0; }
+.was-chip { font-size: 12px; color: var(--muted); text-decoration: line-through; white-space: nowrap; }
+.chips { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.line { margin-top: 14px; font-size: 14px; display: flex; gap: 8px 14px; flex-wrap: wrap; align-items: center; }
+.line .lbl { color: var(--muted); font-size: 13px; }
+.more { margin-top: 12px; }
+.more > div { margin-top: 10px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <p class="eyebrow">Airwallex Agentic Banking Hackathon · Track 1</p>
+    <h1 id="product">Treasury Controller</h1>
+    <p class="lede">Runs a company's multi-currency cash for 72 hours. <strong>The model only reads email; code makes every money decision.</strong></p>
+    <div class="tiles" id="tiles"></div>
+  </header>
+
+  <section id="replay">
+    <h2>Watch it work</h2>
+    <p class="sub">USD 10k and GBP 4.5k in the bank, five bills, USD 8k expected from a customer. Then the customer emails.</p>
+    <div class="replay-grid">
+      <div>
+        <div class="controls">
+          <div class="seg" role="group" aria-label="Ending">
+            <button type="button" data-path="person">Person decides</button>
+            <button type="button" data-path="remittance">Bank confirms</button>
+          </div>
+          <div class="nav">
+            <button type="button" class="btn" id="prev" aria-label="Previous step">←</button>
+            <span class="counter num" id="counter"></span>
+            <button type="button" class="btn primary" id="next" aria-label="Next step">Next →</button>
+          </div>
+        </div>
+        <nav class="steps" id="steps" aria-label="Steps"></nav>
+        <article class="card stage" id="stage" aria-live="polite"></article>
+      </div>
+      <aside class="card side" id="side" aria-label="Benchmark summary"></aside>
+    </div>
+  </section>
+
+  <section id="benchmark">
+    <h2>Benchmark</h2>
+    <p class="sub" id="bench-sub"></p>
+    <div class="card table-wrap"><table id="bench-table"></table></div>
+    <details class="more note"><summary>Method and limits</summary><div id="bench-more"></div></details>
+  </section>
+
+  <section id="design">
+    <h2>How it is built</h2>
+    <p class="sub">The model suggests. Code decides.</p>
+    <div class="flow">
+      <div class="node model"><b>Email reader</b><span>Suggests a confidence</span></div>
+      <div class="node code"><b>Validator</b><span>Checks the quote, caps rises</span></div>
+      <div class="node code"><b>Evidence</b><span>Matches bank and invoice records</span></div>
+      <div class="node code"><b>Planner</b><span>Finds the least costly plan</span></div>
+      <div class="node code"><b>Policy gate</b><span>Sends risky cases to a person</span></div>
+      <div class="node code"><b>Executor</b><span>Pays on Airwallex, never twice</span></div>
+    </div>
+    <details class="more"><summary>The 10 rules</summary><div class="rulegrid" id="rules"></div></details>
+  </section>
+
+  <footer id="foot"></footer>
+</div>
+
+<script src="data.js"></script>
+<script>
+(function () {
+  const D = window.DEMO;
+  if (!D) { document.getElementById("stage").textContent = "data.js is missing: run python3 scripts/export_demo.py"; return; }
+
+  const ACTION = { EXECUTE_NOW: "Pay now", SCHEDULE_ON_DEPOSIT: "Pay on arrival", HOLD: "Hold", DEFER: "Defer",
+                   ESCALATE: "Ask a person", PAID: "Paid", OPEN: "Not planned" };
+  const CRIT = { operations_stop: "Critical", time_sensitive: "Urgent", important: "Important", deferrable: "Can wait" };
+  const RULES = [
+    ["R1", "Pay only from money that has arrived."],
+    ["R2", "Never go below the reserve floor."],
+    ["R3", "Save a request ID before every payment call."],
+    ["R4", "After a timeout, look it up; never resend."],
+    ["R5", "Hold smaller bills while a bigger one waits for a person."],
+    ["R6", "A failed transfer goes to a person, never retried silently."],
+    ["E1", "Never auto-pay a new payee."],
+    ["E2", "Too much reliance on expected money: ask a person."],
+    ["E3", "A critical bill we can't fund: ask a person, with options."],
+    ["E4", "FX quote off by more than 0.5%: re-plan once, then ask."],
+  ];
+
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const fmt = (n, d = 0) => Number(n).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+  const money = (ccy, n) => `${ccy} ${fmt(n, n % 1 ? 2 : 0)}`;
+  const cap = s => s ? s[0].toUpperCase() + s.slice(1) : s;
+
+  /* ---------- benchmark: tiles, sidebar, table ---------- */
+  const rows = D.benchmark.rows, by = Object.fromEntries(rows.map(r => [r.key, r]));
+  const agent = by.agent, best = by.eager_priority, fifo = by.fifo;
+  const cut = 100 * (1 - agent.penalty_mean / best.penalty_mean);
+  document.getElementById("tiles").innerHTML = [
+    [`−${fmt(cut)}%`, "late-payment penalty", "vs the best simple policy"],
+    [`${fmt(agent.crit_on_time_pct, 1)}%`, "critical bills on time", `vs ${fmt(best.crit_on_time_pct, 1)}%`],
+    ["0", "floor breaches or unvetted payees", `across ${fmt(D.benchmark.n)} test worlds`],
+  ].map(([v, k, d]) => `<div class="card tile"><div class="v num">${v}</div><div class="k">${k}</div><div class="d">${d}</div></div>`).join("");
+
+  const sideRows = [fifo, best, agent];
+  const maxPen = Math.max(...sideRows.map(r => r.penalty_mean));
+  const short = { fifo: "Pay on due date", convert_upfront: "Convert everything upfront", priority: "Critical first, on due date",
+                  eager_priority: "Pay critical first", agent_no_signal: "This agent, ignoring email", agent: "This agent" };
+  document.getElementById("side").innerHTML = `
+    <h3>${fmt(D.benchmark.n)} random worlds</h3>
+    <p class="sub">Late-payment penalty, lower is better</p>
+    <div class="bars">${sideRows.map(r => `
+      <div class="bar-row ${r.key === "agent" ? "me" : ""}">
+        <div class="lbl"><span>${short[r.key]}</span><span class="num">${fmt(r.penalty_mean)}</span></div>
+        <div class="bar-track"><div class="bar-val" style="width:${(100 * r.penalty_mean / maxPen).toFixed(1)}%"></div></div>
+      </div>`).join("")}</div>`;
+
+  document.getElementById("bench-sub").textContent = `${fmt(D.benchmark.n)} random cash situations, same rules for every policy.`;
+  document.getElementById("bench-table").innerHTML = `
+    <thead><tr><th>Policy</th><th>Critical on time</th><th>Penalty</th><th>Floor breached</th><th>Unvetted paid /100</th></tr></thead>
+    <tbody>${rows.map(r => `<tr class="${r.key === "agent" ? "me" : ""}">
+      <td>${esc(short[r.key] || r.label)}</td><td>${fmt(r.crit_on_time_pct, 1)}%</td><td>${fmt(r.penalty_mean)}</td>
+      <td>${fmt(r.floor_breach_pct, 1)}%</td><td>${fmt(r.unvetted_per_100, 1)}</td></tr>`).join("")}</tbody>`;
+  const P = D.benchmark.paired;
+  document.getElementById("bench-more").innerHTML = `
+    <p>Seed ${D.benchmark.seed}; 6–9 bills, 72 hours, 1–2 expected receipts per world. Agent penalty 95% CI
+      ${fmt(agent.penalty_ci[0])}–${fmt(agent.penalty_ci[1])}.</p>
+    <p>Paired against "pay critical first": ${fmt(P.penalty.mean_diff)} penalty per world (95% CI ${fmt(P.penalty.ci[0])} to
+      ${fmt(P.penalty.ci[1])}); better in ${fmt(P.penalty.a_better)}, tied in ${fmt(P.penalty.tie)}, worse in ${fmt(P.penalty.a_worse)}.
+      Silent critical misses: ${fmt(agent.crit_silent)} vs ${fmt(best.crit_silent)}.</p>
+    <p>Limits: penalty weights are both the objective and the score, so "critical on time" is the fairer column. Simulated emails
+      are perfect. Where the agent loses, it is usually holding cash for a person who never answers in the simulation.</p>`;
+
+  document.getElementById("rules").innerHTML = RULES.map(([k, t]) => `<div class="rule"><b>${k}</b>${esc(t)}</div>`).join("");
+  document.getElementById("foot").innerHTML =
+    `Generated from the agent's own code (${esc(D.generated_at)}). Use <span class="kbd">←</span> <span class="kbd">→</span> to step.`;
+
+  /* ---------- replay ---------- */
+  let path = "person", idx = 0;
+  const parseHash = () => {
+    const m = location.hash.match(/^#(person|remittance)(?:\/(\d+))?$/);
+    if (m) { path = m[1]; idx = Math.max(0, (parseInt(m[2] || "1", 10) || 1) - 1); }
+  };
+  parseHash();
+  const story = () => D.stories[path].steps;
+  const maxCash = Math.max(...Object.values(D.stories).flatMap(s => s.steps.map(st => st.cash.usd_equiv)));
+
+  function boardAt(i) {
+    const steps = story(), state = {}, order = [];
+    steps.find(s => s.plan).plan.decisions.forEach(d => { state[d.id] = { ...d, action: "OPEN", reason: "", options: [], rules: [] }; order.push(d.id); });
+    for (let k = 0; k <= i; k++) {
+      const st = steps[k];
+      if (st.plan) st.plan.decisions.forEach(d => { if (state[d.id].action !== "PAID") state[d.id] = { ...d }; });
+      (st.executed || []).forEach(id => { state[id] = { ...state[id], action: "PAID", reason: "", options: [], rules: [] }; });
+    }
+    return order.map(id => state[id]);
+  }
+
+  function highlight(text, quote) {
+    const at = quote ? text.toLowerCase().indexOf(quote.toLowerCase()) : -1;
+    if (at < 0) return esc(text);
+    return esc(text.slice(0, at)) + "<mark>" + esc(text.slice(at, at + quote.length)) + "</mark>" + esc(text.slice(at + quote.length));
+  }
+
+  function extras(st) {
+    let h = "";
+    if (st.receipt) {
+      const r = st.receipt;
+      h += `<div class="panel">Expecting <strong class="money">${money(r.ccy, r.amount)}</strong> from ${esc(r.payer)} at ${r.due_h} h ·
+        confidence <strong>${r.confidence.toFixed(2)}</strong></div>`;
+    }
+    if (st.email) {
+      const s = st.signal;
+      h += `<div class="panel"><p class="email">${highlight(st.email, s.evidence)}</p>
+        <div class="conf"><span class="big num">${s.before.toFixed(2)} → ${s.after.toFixed(2)}</span>
+        <span class="tag">${s.source === "llm" ? "LLM, checked by code" : s.source === "stub" ? "keyword fallback" : "rejected"}</span></div></div>`;
+    }
+    (st.remittance || []).forEach(r => {
+      h += `<div class="panel">Bank: <strong>${esc(r.payer)} sent <span class="money">${money(r.ccy, r.amount)}</span></strong>
+        <details style="margin-top:6px"><summary>Record</summary><div class="mono" style="margin-top:4px">UETR ${esc(r.ref)} · value date ${r.date_h} h · ${esc(r.status)}</div></details></div>`;
+    });
+    if (st.corroboration) {
+      const c = st.corroboration;
+      h += `<div class="panel">${c.rejected.map(([ref, why]) => `<div class="reject"><span class="chip a-ESCALATE">Ignored</span>
+          <span><span class="mono">${esc(ref)}</span><details><summary>Why</summary><div style="font-size:13px;color:var(--muted)">${esc(cap(why))}.</div></details></span></div>`).join("")}
+        ${c.matched.length ? `<div class="reject"><span class="chip a-EXECUTE_NOW">Matched</span><span>Payer, currency, amount and date all agree</span></div>` : ""}
+        <div class="conf"><span>Confidence</span><span class="big num">${c.confidence.toFixed(2)}</span></div></div>`;
+    }
+    if (st.choice) h += `<div class="panel">Approver chose: <strong>wait for the money</strong></div>`;
+    if (st.locked) h += `<div class="panel">Re-planned: <strong>${st.recomputed.length}</strong> bills · kept as is: <strong>${st.locked.length}</strong></div>`;
+    if (st.floor_ok !== undefined) h += `<div class="panel">Floor kept: <strong>${st.floor_ok ? "yes ✓" : "NO"}</strong> · still open: <strong>${st.still_open.map(esc).join(", ")}</strong></div>`;
+    return h;
+  }
+
+  function gauge(c) {
+    return `<div class="gauge"><div class="gauge-bar" role="img" aria-label="Cash ${fmt(c.usd_equiv)} USD, floor ${fmt(c.floor)} USD">
+      <div class="gauge-fill" style="width:${(100 * c.usd_equiv / maxCash).toFixed(2)}%"></div>
+      <div class="gauge-floor" style="left:${(100 * c.floor / maxCash).toFixed(2)}%" title="reserve floor"></div></div>
+      <div class="gauge-label"><span>Cash <strong class="num">USD ${fmt(c.usd_equiv)}</strong></span>
+      <span>Floor <strong class="num">USD ${fmt(c.floor)}</strong></span></div></div>`;
+  }
+
+  function board(i) {
+    const now = boardAt(i), before = i > 0 ? Object.fromEntries(boardAt(i - 1).map(d => [d.id, d.action])) : {};
+    return `<div class="board">${now.map(d => {
+      const changed = i > 0 && before[d.id] && before[d.id] !== d.action;
+      const hot = d.criticality === "operations_stop" || d.criticality === "time_sensitive";
+      const conv = d.convert && d.action !== "PAID"
+        ? `Converts USD ${fmt(d.convert.usd, 2)} → ${money(d.ccy, d.convert.amount)}${d.convert.fee ? ` (incl. ${d.ccy} ${d.convert.fee} SWIFT fee)` : ""}.` : "";
+      const detail = d.reason || conv || (d.options && d.options.length);
+      return `<div class="ob ${changed ? "changed" : ""}">
+        <div><div class="name">${esc(d.payee)}${d.new_beneficiary ? ' <span class="tag">new payee</span>' : ""}</div>
+          <div class="meta"><span class="money">${money(d.ccy, d.amount)}</span> · due ${d.due_h} h ·
+          <span class="crit ${hot ? "hot" : ""}">${CRIT[d.criticality]}</span></div></div>
+        <div class="right"><div class="chips">${changed ? `<span class="was-chip">${ACTION[before[d.id]]}</span>` : ""}<span class="chip a-${d.action}">${ACTION[d.action]}</span></div></div>
+        ${detail ? `<details><summary>Why${d.options && d.options.length ? ` · ${d.options.length} options` : ""}</summary>
+          ${d.reason ? `<div>${esc(cap(d.reason))}${/[.)]$/.test(d.reason) ? "" : "."}${d.rules && d.rules.length ? ` <span class="rules">[${d.rules.join(", ")}]</span>` : ""}</div>` : ""}
+          ${conv ? `<div>${conv}</div>` : ""}
+          ${d.options && d.options.length ? `<ul>${d.options.map(o => `<li><span class="mono">${esc(o.split(":")[0])}</span>${esc(o.slice(o.indexOf(":")))}</li>`).join("")}</ul>` : ""}
+        </details>` : ""}
+      </div>`;
+    }).join("")}</div>`;
+  }
+
+  function render() {
+    const steps = story();
+    idx = Math.min(idx, steps.length - 1);
+    const st = steps[idx];
+    document.querySelectorAll(".seg button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.path === path)));
+    document.getElementById("steps").innerHTML = steps.map((s, k) =>
+      `<button type="button" data-k="${k}" class="${k < idx ? "done" : ""}" ${k === idx ? 'aria-current="step"' : ""}>${k + 1}. ${esc(s.title)}</button>`).join("");
+    document.getElementById("counter").textContent = `${idx + 1} / ${steps.length}`;
+    document.getElementById("prev").disabled = idx === 0;
+    document.getElementById("next").disabled = idx === steps.length - 1;
+    document.getElementById("stage").innerHTML = `<div class="stage-head"><h3>${esc(st.title)}</h3><p>${esc(st.text)}</p></div>
+      ${extras(st)}${gauge(st.cash)}${board(idx)}`;
+    const cur = document.querySelector('#steps [aria-current="step"]');
+    if (cur) cur.scrollIntoView({ block: "nearest", inline: "nearest" });
+    history.replaceState(null, "", `#${path}/${idx + 1}`);
+  }
+
+  document.querySelectorAll(".seg button").forEach(b => b.addEventListener("click", () => {
+    if (b.dataset.path === path) return;
+    const key = story()[idx].key;
+    path = b.dataset.path;
+    const same = story().findIndex(s => s.key === key);
+    idx = same >= 0 ? same : Math.min(idx, story().length - 1);
+    render();
+  }));
+  document.getElementById("steps").addEventListener("click", e => { const b = e.target.closest("button"); if (b) { idx = +b.dataset.k; render(); } });
+  document.getElementById("prev").addEventListener("click", () => { idx = Math.max(0, idx - 1); render(); });
+  document.getElementById("next").addEventListener("click", () => { idx = Math.min(story().length - 1, idx + 1); render(); });
+  document.addEventListener("keydown", e => {
+    if (e.target.closest("input, textarea, summary")) return;
+    if (e.key === "ArrowRight") { idx = Math.min(story().length - 1, idx + 1); render(); }
+    if (e.key === "ArrowLeft") { idx = Math.max(0, idx - 1); render(); }
+  });
+  window.addEventListener("hashchange", () => { parseHash(); render(); });
+  render();
+})();
+</script>
+</body>
+</html>

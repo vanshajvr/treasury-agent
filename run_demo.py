@@ -1,6 +1,6 @@
-"""Offline demo of the Treasury Controller flow (no network, no money moves).
+"""Offline demo of the Treasury Controller flow (no network unless an LLM key is set; no money moves).
 
-goal -> initial plan -> new information -> revised decision -> human choice
+goal -> initial plan -> new information -> revised decision -> evidence check -> human choice or bank evidence
      -> deposit -> incremental recompute -> execution -> remaining reserve
 
     python run_demo.py               a person answers the escalation ("wait_for_receipt")
@@ -8,90 +8,66 @@ goal -> initial plan -> new information -> revised decision -> human choice
 """
 import sys
 
-from treasury.signals import propose_signal
-from treasury import (apply_deposit, apply_execution, corroborate, format_plan, load_evidence, load_policy,
-                      load_scenario, plan, replan, usd_eq, with_confidence)
-
-REMITTANCE = "--remittance" in sys.argv
+from treasury import load_evidence, load_policy, load_scenario
+from treasury.story import build_story
 
 EMAIL = ("Hi, our internal approval has been delayed and we won't be able to release the USD 8,000 "
          "payment this week. Likely next month. Sorry for the trouble.")
 
 
-def banner(text: str) -> None:
-    print(f"\n{'=' * 78}\n{text}\n{'=' * 78}")
+def cash_line(c: dict) -> str:
+    w = ", ".join(f"{k} {v:,.2f}" for k, v in c["wallets"].items())
+    return f"settled cash: {w} | USD-equiv {c['usd_equiv']:,.2f} (floor {c['floor']:,.0f})"
 
 
-def wallets_line(s) -> str:
-    cash = ", ".join(f"{c} {v:,.2f}" for c, v in s.wallets.items())
-    return f"settled cash: {cash} | USD-equiv {usd_eq(s.wallets, s.rates):,.2f} (floor {s.reserve_floor_usd:,.0f})"
+def print_plan(p: dict) -> None:
+    print(f"confidence {p['confidence']:.2f} | autonomous limit {p['limit_usd']:,.0f} USD | "
+          f"forecast-reliant spend {p['reliant_usd']:,.0f} USD")
+    for d in p["decisions"]:
+        print(f"  {d['id']:<11} {d['action']:<20} {d['ccy']} {d['amount']:>9,.2f} due {d['due_h']:g}h")
+        if "convert" in d:
+            cv = d["convert"]
+            fee = f" (incl. {d['ccy']} {cv['fee']:.2f} SWIFT fee)" if cv["fee"] else ""
+            print(f"      convert USD {cv['usd']:,.2f} -> {d['ccy']} {cv['amount']:,.2f}{fee}")
+        print(f"      {d['reason']}")
+        for o in d["options"]:
+            print(f"      option: {o}")
 
 
-policy = load_policy("policy.json")
-s0 = load_scenario("scenario.json")
-receipt = s0.receipts[0]
+def main() -> None:
+    path = "remittance" if "--remittance" in sys.argv else "person"
+    story = build_story(load_scenario("scenario.json"), load_policy("policy.json"), EMAIL,
+                        load_evidence("evidence.json"), path)
+    for i, st in enumerate(story["steps"], 1):
+        print(f"\n{'=' * 78}\n{i}. {st['title'].upper()}\n{'=' * 78}\n{st['text']}\n")
+        if "receipt" in st:
+            r = st["receipt"]
+            print(f"forecast: {r['payer']} pays {r['ccy']} {r['amount']:,.0f} at {r['due_h']:g}h "
+                  f"(confidence {r['confidence']:.2f})")
+        if "email" in st:
+            sg = st["signal"]
+            print(f'"{st["email"]}"\n\nsignal [{sg["source"]}]: confidence {sg["before"]:.2f} -> {sg["after"]:.2f} '
+                  f'({sg["reason"]})')
+            if sg["evidence"]:
+                print(f'evidence quoted from the email: "{sg["evidence"]}"')
+        for r in st.get("remittance", []):
+            print(f"  remittance UETR {r['ref']}: {r['payer']} {r['ccy']} {r['amount']:,.0f}, "
+                  f"value date {r['date_h']:g}h, {r['status']}")
+        if "corroboration" in st:
+            c = st["corroboration"]
+            for ref, why in c["rejected"]:
+                print(f"  {ref}: not used. {why}")
+            print(f"{c['reason']} (confidence {c['confidence']:.2f})")
+        if "locked" in st:
+            print(f"locked (unaffected): {st['locked'] or 'none'} | recomputed: {st['recomputed']}")
+        if st["plan"]:
+            print_plan(st["plan"])
+        if "executed" in st:
+            print(f"executed: {st['executed']}")
+        print(cash_line(st["cash"]))
+        if "floor_ok" in st:
+            print(f"reserve floor respected: {st['floor_ok']} | still open: {st['still_open']}")
 
-banner("1. GOAL: pay what matters over 72h, keep the reserve floor, never act on unsettled money")
-print(wallets_line(s0))
-print(f"forecast: {receipt.payer} pays {receipt.ccy} {receipt.amount:,.0f} at {receipt.due_h:g}h "
-      f"(confidence {receipt.confidence:.2f})")
 
-banner("2. INITIAL PLAN (confidence 0.90)")
-p1 = plan(s0, policy)
-print(format_plan(p1, s0))
-s1 = apply_execution(s0, p1)
-print(f"\nexecuted now: {[o for o, d in p1.decisions.items() if d.action == 'EXECUTE_NOW']}")
-print(wallets_line(s1))
-
-banner("3. NEW INFORMATION: customer email arrives")
-print(f'"{EMAIL}"')
-sig = propose_signal(EMAIL, receipt.confidence, receipt)
-conf = sig.confidence
-print(f"\nsignal [{sig.source}]: confidence {receipt.confidence:.2f} -> {conf:.2f} ({sig.reason})")
-if sig.evidence:
-    print(f'evidence quoted from the email: "{sig.evidence}"')
-s1 = with_confidence(s1, receipt.id, conf)
-
-banner("4. REVISED DECISION")
-p2 = plan(s1, policy)
-print(format_plan(p2, s1))
-print("\nthe SAME supplier conversion is now blocked from autonomous execution and escalated to a person")
-
-evidence = load_evidence("evidence.json")
-invoices = [e for e in evidence if e.kind == "invoice"]
-banner("4b. EVIDENCE CHECK: accounts receivable shows an approved invoice")
-contradicted = conf < receipt.confidence
-c = corroborate(receipt, invoices, conf, policy.evidence, contradicted=contradicted)
-for ref, why in c.rejected:
-    print(f"  {ref}: not used. {why}")
-print(f"confidence stays {c.confidence:.2f}: the escalation stands")
-
-if REMITTANCE:
-    banner("5. BANK EVIDENCE: the payer's bank sends a remittance advice (structured, matched in code)")
-    rem = [e for e in evidence if e.kind == "remittance"]
-    for e in rem:
-        print(f"  remittance UETR {e.ref}: {e.payer} {e.ccy} {e.amount:,.0f}, value date {e.date_h:g}h, {e.status}")
-    c = corroborate(receipt, rem, conf, policy.evidence, contradicted=contradicted)
-    print(f"\n{c.reason}")
-    s1 = with_confidence(s1, receipt.id, c.confidence)
-    p2 = plan(s1, policy)
-    print(format_plan(p2, s1))
-    print("\nno person needed: the supplier is back on SCHEDULE_ON_DEPOSIT, and still only pays once the money settles (R1)")
-else:
-    banner("5. HUMAN CHOICE (simulated): wait_for_receipt")
-    print("approver picks 'wait_for_receipt'. Contractor and tooling stay on HOLD so the cash is preserved.")
-
-banner("6. DEPOSIT SETTLES: USD 8,000 arrives; re-plan only what the USD pool can affect")
-s2 = apply_deposit(s1, receipt.id)
-print(wallets_line(s2))
-p3, locked, recomputed = replan(p2, s2, policy, {"USD"})
-print(f"locked (unaffected): {locked or 'none'} | recomputed: {recomputed}\n")
-print(format_plan(p3, s2))
-
-banner("7. EXECUTION AND FINAL CHECK")
-s3 = apply_execution(s2, p3)
-print(f"executed: {[o for o, d in p3.decisions.items() if d.action == 'EXECUTE_NOW']}")
-print(wallets_line(s3))
-ok = usd_eq(s3.wallets, s3.rates) >= s3.reserve_floor_usd
-print(f"reserve floor respected: {ok}")
-print(f"still open: {[o.id for o in s3.obligations]} -> deferred or waiting for a person")
+if __name__ == "__main__":
+    main()
