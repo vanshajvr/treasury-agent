@@ -12,7 +12,7 @@ from typing import Callable
 
 from .evidence import corroborate
 from .models import Scenario
-from .planner import EXECUTE_NOW, Plan, apply_deposit, apply_execution, plan, replan, usd_eq, with_confidence
+from .planner import ESCALATE, EXECUTE_NOW, SCHEDULE, Plan, apply_deposit, apply_execution, plan, replan, usd_eq, with_confidence
 from .policy import Policy
 from .signals import Signal, propose_signal
 
@@ -50,13 +50,51 @@ def _signal_view(sig: Signal, before: float) -> dict:
             "evidence": sig.evidence, "category": sig.category}
 
 
+def _names(ids: list, s: Scenario) -> str:
+    by_id = {o.id: o.payee for o in s.obligations}
+    names = [by_id.get(i, i) for i in ids]
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def _verb(ids: list, one: str, many: str) -> str:
+    return one if len(ids) == 1 else many
+
+
+def _needs_person(p: Plan) -> list:
+    """Escalated because of money or forecast risk (E2/E3), not the always-on new-payee rule."""
+    return [oid for oid, d in p.decisions.items() if d.action == ESCALATE and {"E2", "E3"} & set(d.rules)]
+
+
+def _first_plan_text(p: Plan, s: Scenario) -> str:
+    out = []
+    now = _executed(p)
+    sched = [oid for oid, d in p.decisions.items() if d.action == SCHEDULE]
+    person = _needs_person(p)
+    if now:
+        out.append(f"{_names(now, s)} {_verb(now, 'is', 'are')} paid now.")
+    if sched:
+        out.append(f"{_names(sched, s)} {_verb(sched, 'waits', 'wait')} for the customer's money.")
+    if person:
+        out.append(f"{_names(person, s)} {_verb(person, 'needs', 'need')} a person.")
+    return " ".join(out) or "Nothing can be paid yet."
+
+
+def _corr_view(c) -> dict:
+    return {"confidence": c.confidence, "reason": c.reason, "matched": list(c.matched),
+            "rejected": [list(r) for r in c.rejected]}
+
+
 def build_story(scenario: Scenario, policy: Policy, email: str, evidence: list, path: str = "person",
-                signal: Callable[..., Signal] = propose_signal) -> dict:
-    """Run the whole scenario. `signal(email, current, receipt)` is injectable so the API and tests can pin it."""
+                signal: Callable[..., Signal] = propose_signal, start_confidence: float | None = None) -> dict:
+    """Run the whole scenario. `signal(email, current, receipt)` is injectable so the API and tests can pin it.
+    `start_confidence` overrides the forecast's confidence before anything happens."""
     if path not in PATHS:
         raise ValueError(f"path must be one of {PATHS}")
+    receipt = scenario.receipts[0]
+    if start_confidence is not None:
+        scenario = with_confidence(scenario, receipt.id, min(1.0, max(0.0, float(start_confidence))))
+        receipt = scenario.receipts[0]
     s0 = scenario
-    receipt = s0.receipts[0]
     steps = []
 
     def step(key: str, title: str, text: str, s: Scenario, p: Plan | None = None, planned_on: Scenario | None = None,
@@ -71,50 +109,73 @@ def build_story(scenario: Scenario, policy: Policy, email: str, evidence: list, 
 
     p1 = plan(s0, policy)
     s1 = apply_execution(s0, p1)
-    step("plan", "First plan",
-         "Freight is paid now. The supplier waits for the customer's money.", s1, p1, planned_on=s0, executed=_executed(p1))
+    step("plan", "First plan", _first_plan_text(p1, s0), s1, p1, planned_on=s0, executed=_executed(p1))
 
+    # the email: the model proposes, code validates (signals.py)
     sig = signal(email, receipt.confidence, receipt)
     conf = sig.confidence
     s1 = with_confidence(s1, receipt.id, conf)
     p2 = plan(s1, policy)
-    step("email", "Customer email",
-         "The model reads it and suggests a new confidence. Code checks the quote.", s1, None,
+    step("email", "Customer email", "The model reads it and suggests a new confidence. Code checks the quote.", s1, None,
          email=email, signal=_signal_view(sig, receipt.confidence))
-    step("revised", "New plan",
-         "The supplier now depends on money we no longer trust, so a person decides.", s1, p2)
+    before, after = set(_needs_person(p1)), set(_needs_person(p2))
+    added, removed = sorted(after - before), sorted(before - after)
+    if added:
+        text = f"{_names(added, s1)} now {_verb(added, 'depends', 'depend')} on money we no longer trust, so a person decides."
+    elif removed:
+        text = f"{_names(removed, s1)} no longer {_verb(removed, 'needs', 'need')} a person."
+    else:
+        text = "The plan doesn't change."
+    step("revised", "New plan", text, s1, p2)
 
+    # structured evidence: matched in code (evidence.py)
     contradicted = conf < receipt.confidence
-    invoices = [e for e in evidence if e.kind == "invoice"]
-    c = corroborate(receipt, invoices, conf, policy.evidence, contradicted=contradicted)
-    step("evidence", "Invoice check",
-         "An approved invoice proves the debt, not the timing, so it changes nothing.", s1, None,
-         corroboration={"confidence": c.confidence, "reason": c.reason, "matched": list(c.matched),
-                        "rejected": [list(r) for r in c.rejected]})
+    c = corroborate(receipt, [e for e in evidence if e.kind == "invoice"], conf, policy.evidence, contradicted=contradicted)
+    if c.confidence > conf:
+        conf = c.confidence
+        s1 = with_confidence(s1, receipt.id, conf)
+        p2 = plan(s1, policy)
+        step("evidence", "Invoice check", f"The approved invoice matches, so confidence rises to {conf:.2f}.", s1, p2,
+             corroboration=_corr_view(c))
+    else:
+        if contradicted and c.rejected and not c.matched:
+            text = "An approved invoice proves the debt, not the timing, so it changes nothing."
+        elif c.matched:
+            text = "The invoice matches, but confidence is already higher."
+        else:
+            text = "No invoice matches this payment."
+        step("evidence", "Invoice check", text, s1, None, corroboration=_corr_view(c))
 
     if path == "remittance":
         rem = [e for e in evidence if e.kind == "remittance"]
         c = corroborate(receipt, rem, conf, policy.evidence, contradicted=contradicted)
+        raised = c.confidence > conf
         s1 = with_confidence(s1, receipt.id, c.confidence)
         p2 = plan(s1, policy)
-        step("bank", "Bank confirms",
-             "The bank's record matches exactly, so the supplier is back on track. No person needed.", s1, p2,
+        text = (f"The bank's record matches exactly, so confidence rises to {c.confidence:.2f}. No person needed."
+                if raised else "Confidence is already high; the bank record changes nothing.")
+        step("bank", "Bank confirms", text, s1, p2,
              remittance=[{"ref": e.ref, "payer": e.payer, "ccy": e.ccy, "amount": e.amount, "date_h": e.date_h,
                           "status": e.status} for e in rem],
-             corroboration={"confidence": c.confidence, "reason": c.reason, "matched": list(c.matched),
-                            "rejected": [list(r) for r in c.rejected]})
+             corroboration=_corr_view(c))
     else:
-        step("person", "Person decides",
-             "The approver chooses to wait for the customer's money.", s1, p2, choice="wait_for_receipt")
+        if _needs_person(p2):
+            step("person", "Person decides", "The approver chooses to wait for the customer's money.", s1, p2,
+                 choice="wait_for_receipt")
+        else:
+            step("person", "Person decides", "Nothing needs a person's decision.", s1, p2)
 
     s2 = apply_deposit(s1, receipt.id)
     p3, locked, recomputed = replan(p2, s2, policy, {receipt.ccy})
     step("deposit", "Money arrives",
-         f"{receipt.ccy} {receipt.amount:,.0f} settles. Only bills that use {receipt.ccy} are re-planned.", s2, p3, locked=locked, recomputed=recomputed)
+         f"{receipt.ccy} {receipt.amount:,.0f} settles. Only bills that use {receipt.ccy} are re-planned.", s2, p3,
+         locked=locked, recomputed=recomputed)
 
     s3 = apply_execution(s2, p3)
     ok = usd_eq(s3.wallets, s3.rates) >= s3.reserve_floor_usd
-    step("final", "Done",
-         "Supplier and contractor are paid. The new payee still waits for a person.", s3, None, executed=_executed(p3), floor_ok=ok,
-         still_open=[o.id for o in s3.obligations])
+    paid, left = _executed(p3), [o.id for o in s3.obligations]
+    parts = [f"{_names(paid, s2)} {_verb(paid, 'is', 'are')} paid." if paid else "Nothing more is paid."]
+    if left:
+        parts.append(f"{_names(left, s2)} {_verb(left, 'waits', 'wait')} for a person or a later date.")
+    step("final", "Done", " ".join(parts), s3, None, executed=paid, floor_ok=ok, still_open=left)
     return {"path": path, "steps": steps}
