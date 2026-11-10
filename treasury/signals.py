@@ -69,7 +69,8 @@ def keyword_signal(email_text: str, current: float) -> Signal:
     if any(k in t for k in NEGATIVE):
         return Signal(min(current, 0.4), "email signals a delay or inability to pay", "stub", category="delay")
     if any(k in t for k in POSITIVE):
-        return Signal(max(current, 0.95), "email confirms payment was sent", "stub", category="confirmation")
+        conf = max(current, min(0.95, current + MAX_RAISE))   # same +MAX_RAISE cap as the model path
+        return Signal(round(conf, 4), "email says payment was sent (rise capped per email)", "stub", category="confirmation")
     return Signal(current, "no clear signal; confidence unchanged", "stub", category="neutral")
 
 

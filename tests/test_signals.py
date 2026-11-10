@@ -76,7 +76,9 @@ def test_no_api_key_falls_back(clean_env):
 
 def test_keyword_rule_unchanged():
     assert keyword_signal(EMAIL, 0.9).confidence == 0.4
-    assert keyword_signal("payment sent today", 0.5).confidence == 0.95
+    assert keyword_signal("payment sent today", 0.5).confidence == pytest.approx(0.65)   # capped like the model
+    assert keyword_signal("payment sent today", 0.9).confidence == pytest.approx(0.95)
+    assert keyword_signal("payment sent today", 0.97).confidence == pytest.approx(0.97)  # never lowers
     assert keyword_signal("hello", 0.7).confidence == 0.7
 
 
