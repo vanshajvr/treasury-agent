@@ -16,12 +16,22 @@ class Tier:
 
 
 @dataclass(frozen=True)
+class EvidenceRules:
+    """How far structured evidence may lift a forecast receipt (see treasury/evidence.py)."""
+    invoice_conf: float = 0.8       # approved invoice: enough to reach the top tier
+    remittance_conf: float = 0.97   # bank remittance advice with a UETR
+    amount_tolerance: float = 0.005  # relative difference allowed between record and forecast
+    grace_h: float = 6.0            # how late the record's date may be versus the forecast due time
+
+
+@dataclass(frozen=True)
 class Policy:
     tiers: tuple       # sorted by min_conf, highest first
     penalties: dict    # criticality -> lateness penalty weight
     spread_bps: float
     swift_fee: dict    # currency -> flat fee per SWIFT payout
     local_fee: dict = field(default_factory=dict)  # currency -> flat fee per LOCAL payout (observed, see POLICY.md)
+    evidence: EvidenceRules = field(default_factory=EvidenceRules)
 
     @property
     def fees(self) -> dict:
@@ -46,4 +56,4 @@ def load_policy(path: str | Path) -> Policy:
         raise ValueError(f"penalties missing for: {sorted(missing)}")
     return Policy(tiers=tiers, penalties=dict(raw["penalties"]),
                   spread_bps=float(raw["spread_bps"]), swift_fee=dict(raw.get("swift_fee", {})),
-                  local_fee=dict(raw.get("local_fee", {})))
+                  local_fee=dict(raw.get("local_fee", {})), evidence=EvidenceRules(**raw.get("evidence", {})))

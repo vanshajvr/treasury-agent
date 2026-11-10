@@ -1,0 +1,6 @@
+[
+  {"kind": "invoice", "ref": "INV-1042", "payer": "Customer A", "ccy": "USD", "amount": 8000,
+   "date_h": 30, "status": "approved"},
+  {"kind": "remittance", "ref": "9f2c1d7e-3b4a-4c8e-9a1f-6d5e2b7c8a90", "payer": "Customer A", "ccy": "USD",
+   "amount": 8000, "date_h": 28, "status": "sent"}
+]

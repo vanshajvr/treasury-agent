@@ -12,5 +12,6 @@
   },
   "spread_bps": 100,
   "swift_fee": {"EUR": 12.85},
-  "local_fee": {"GBP": 2.25, "USD": 3.0}
+  "local_fee": {"GBP": 2.25, "USD": 3.0},
+  "evidence": {"invoice_conf": 0.8, "remittance_conf": 0.97, "amount_tolerance": 0.005, "grace_h": 6}
 }

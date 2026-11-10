@@ -41,6 +41,20 @@ Priority and penalty: `operations_stop` 1,000,000 | `time_sensitive` 50,000 | `i
 
 Effective confidence = amount-weighted mean over unsettled receipts (1.0 if none are forecast).
 
+## What may move confidence (`treasury/signals.py`, `treasury/evidence.py`)
+- **Customer email** (untrusted free text, read by the model): may lower confidence freely; may raise it
+  by at most 0.15 per email, and only with a verbatim quote that code finds in the email.
+- **Structured evidence** (records from systems of record, matched field by field in code, no model):
+  payer, currency, amount (within 0.5%) and date (within 6h of the forecast due time) must all match,
+  and a reference may corroborate only one receipt.
+  - *Approved invoice* -> confidence at least 0.80 (top tier). Not applied once a customer email has
+    contradicted the forecast: an approved invoice proves the debt, not the timing.
+  - *Bank remittance advice* with a valid UETR, status `sent` -> confidence at least 0.97, even after
+    a delay email: the bank outranks the customer's email.
+- Evidence never lowers confidence, and a corroborated receipt is still not spendable until it settles
+  (R1): a higher tier only lets scheduled payments proceed without a person (E2).
+- Thresholds: `policy.json` -> `evidence`.
+
 ## Escalation triggers (always to a person)
 - **E1** Beneficiary is new: never auto-paid, whatever the cash position. The reason states whether
   it would fit inside the floor if approved.
@@ -57,9 +71,9 @@ re-decide only the rest. A USD deposit touches every decision funded from USD (i
 conversions to EUR/GBP); a GBP payout funded from the GBP wallet is locked.
 
 ## LLM boundary
-May: read emails, propose a confidence value with a reason, explain decisions.
-May not: set amounts, limits, floors, tiers, or approve anything.
-Currently `treasury/signals.py` is a keyword stub with the same interface the LLM step will use.
+May: read emails, propose a confidence value with a reason and a verbatim quote, explain decisions.
+May not: set amounts, limits, floors, tiers, read structured evidence, or approve anything.
+Any provider failure or rejected proposal falls back to a deterministic keyword rule.
 
 ## Expected plans (covered by `tests/test_planner.py`)
 | confidence | freight | supplier | contractor | tooling | licence |
