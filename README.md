@@ -44,7 +44,7 @@ flowchart LR
    pay now, pay on arrival, hold, defer or ask a person.
 2. **Policy gate.** Applies the escalation rules. Thresholds live in [`policy.json`](policy.json), never in a prompt.
 3. **Executor.** For each pay-now decision: re-read settled balances, FX quote (single use) and drift check, conversion,
-   transfer, sandbox status moves to PAID, then reconcile the ledger against the plan.
+   transfer, sandbox status moves to PAID, then reconcile balances against Airwallex's record of what the payout cost.
 4. **Signals.** An email can lower trust in a forecast; a matched invoice or bank remittance can raise it.
 
 ## Prompt-injection defence: two layers
@@ -80,8 +80,23 @@ Details, confidence tiers and penalties: [`POLICY.md`](POLICY.md).
 Endpoints used: `balances/current`, `fx/quotes/create`, `fx/conversions/create`, `beneficiaries/create`,
 `transfers/create`, `transfers/{id}`, `simulation/transfers/{id}/transition`, `simulation/deposit/create`.
 
-Paid to `PAID` in the sandbox, each with balances reconciled: a LOCAL GBP payout, a converted SWIFT EUR payout and a
-LOCAL USD payout. Conversions are booked over REST; each FX quote is used once.
+Latest live run (`python run_live.py --deposit --live`, 12 Nov 2026): three payouts reached `PAID`. Each wallet moved by
+exactly what Airwallex's own transfer record says the payout cost, to the cent.
+
+| Bill | Payout | Fee charged (estimate) | Wallet debit: expected = actual | Transfer ID |
+|---|---|---|---|---|
+| Freight | LOCAL GBP 4,200 | GBP 2.26 (2.25) | GBP 4,202.26 | `272e6b6e-e24e-4bb3-99eb-98a63cc474e1` |
+| Supplier | SWIFT EUR 9,800, converted from USD | EUR 13.53 (12.85) | USD 11,000.51 + EUR 0.68 | `d345bc21-e213-43fc-ba7b-7751244b7767` |
+| Contractor | LOCAL USD 4,000 | USD 3.00 (3.00) | USD 4,003.00 | `390fe255-baf2-429b-848f-60f7e592bc58` |
+
+The same run also showed the guards working: the supplier's FX quote came back 1.22% off plan, so E4 re-planned at the
+quoted rate before converting; the licence (new payee) was escalated and tooling deferred, never executed. A second run
+over the same ledger paid nothing: every bill was already recorded as done (R3).
+
+*What the sandbox taught us.* The first run (20 Oct) did not reconcile: the USD LOCAL fee was unmodelled and the SWIFT fee
+was off. That led to modelling the LOCAL fees and then to reconciling against Airwallex's record instead of the fee
+estimate, because the SWIFT fee floats between payouts (EUR 13.37, then 13.53). Conversions are booked over REST; each FX
+quote is used once.
 
 ## Benchmark
 
@@ -110,7 +125,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env              # optional: add an LLM key; Airwallex keys only for run_live.py
 
-python -m pytest -q               # 105 tests, offline
+python -m pytest -q               # 109 tests, offline
 python run_demo.py                # the scenario in the terminal (add --remittance for the bank ending)
 python server.py                  # demo page + "try your own email" at http://127.0.0.1:8000
 python benchmark.py               # regenerate results/ (2,000 worlds)

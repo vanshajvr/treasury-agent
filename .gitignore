@@ -2,7 +2,7 @@
 .venv/ledger.json
 .beneficiary.json
 .ledger.json
-ledger.json
+ledger*.json
 beneficiaries.json
 my_test.json
 __pycache__/

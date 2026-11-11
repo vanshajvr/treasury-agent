@@ -127,14 +127,14 @@ class Executor:
             self.ledger.update(ob.id, stage="TRANSFERRED", transfer_id=transfer.get("id"))
         status = "TRANSFER_CREATED"
         tid = transfer.get("id")
-        final = transfer.get("status")
         if self.simulate and tid:
             self._simulate(tid)
-            final = self._transfer_status(tid)
-            status = "PAID_SIM" if final == "PAID" else "UNCONFIRMED"  # trust the re-read, not the 2xx
+            transfer = self._transfer_read(tid)                        # trust the re-read, not the 2xx
+            status = "PAID_SIM" if transfer.get("status") == "PAID" else "UNCONFIRMED"
+        final = transfer.get("status")
         if final in FAILED_STATES:
             return self._park_failed(ob, d, tid, quote_info)
-        recon = self._reconcile(ob, d, self.ledger.entry(ob.id).get("balances_before", bal))
+        recon = self._reconcile(ob, d, self.ledger.entry(ob.id).get("balances_before", bal), transfer)
         self.ledger.update(ob.id, stage="DONE", final_status=final, reconciliation=recon)
         return ExecResult(ob.id, status, {"transfer_id": tid, "transfer_status": final, "reconciliation": recon, **quote_info})
 
@@ -243,11 +243,19 @@ class Executor:
         stage = "CONVERTED" if e.get("conversion_id") else "NEW"
         self.ledger.update(obligation_id, stage=stage, failed_attempts=history)
 
-    def _reconcile(self, ob: Obligation, d, before: dict) -> dict:
-        """Compare what the plan said the payout would cost with what the ledger actually shows.
-        Net effect of convert + transfer: obligation-currency wallet -from_wallet, USD wallet -usd_spent."""
+    def _reconcile(self, ob: Obligation, d, before: dict, transfer: dict | None = None) -> dict:
+        """Did the balances move by exactly what Airwallex says this payout cost?
+
+        Net effect of convert + transfer: obligation-currency wallet -(payer pays - converted), USD wallet -usd_spent.
+        "Payer pays" is the transfer's own `amount_payer_pays` when Airwallex reports it, else the plan's estimate.
+        Fees can float (the sandbox SWIFT EUR fee was 13.37 one day, 13.53 another), so a fee that differs from the
+        policy estimate is reported under `fee`, not as a mismatch. A mismatch means money moved that neither the
+        plan nor Airwallex's own record accounts for."""
         after = self.settled_balances()
-        planned = {ob.ccy: d.from_wallet}
+        planned_pays = d.from_wallet + d.converted                    # in the obligation currency
+        charged = (transfer or {}).get("amount_payer_pays")
+        pays = float(charged) if charged is not None else planned_pays
+        planned = {ob.ccy: pays - d.converted}
         if ob.ccy != BASE:
             # USD is checked at the rate actually quoted: a better or worse quote is not a planning error
             qr = self.ledger.entry(ob.id).get("quote_rate")
@@ -255,7 +263,10 @@ class Executor:
         actual = {c: round(before.get(c, 0.0) - after.get(c, 0.0), 4) for c in planned}
         diff = {c: round(actual[c] - planned[c], 4) for c in planned}
         return {"planned_debit": {c: round(v, 4) for c, v in planned.items()}, "actual_debit": actual,
-                "diff": diff, "ok": all(abs(v) <= RECON_TOLERANCE for v in diff.values())}
+                "diff": diff, "ok": all(abs(v) <= RECON_TOLERANCE for v in diff.values()),
+                "checked_against": "airwallex" if charged is not None else "plan",
+                "fee": {"ccy": ob.ccy, "estimated": round(planned_pays - ob.amount, 2),
+                        "charged": round(pays - ob.amount, 2), "variance": round(pays - planned_pays, 2)}}
 
     def _find(self, path: str, request_id: str) -> dict | None:
         """R4: has an operation with this request_id already happened? Filter client-side too,

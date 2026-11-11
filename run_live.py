@@ -46,8 +46,12 @@ def run_batch(ex, s, p, policy, only, dry):
             continue
         rec = r.detail.get("reconciliation")
         if rec and not rec["ok"]:
-            print(f"{ob.id}: RECONCILIATION MISMATCH planned {rec['planned_debit']} actual {rec['actual_debit']} "
-                  f"diff {rec['diff']} - update policy.json fees or investigate")
+            print(f"{ob.id}: RECONCILIATION MISMATCH expected {rec['planned_debit']} actual {rec['actual_debit']} "
+                  f"diff {rec['diff']} - money moved that Airwallex's transfer record does not explain; investigate")
+        fee = (rec or {}).get("fee") or {}
+        if abs(fee.get("variance", 0)) > 0.005:
+            print(f"{ob.id}: fee {fee['ccy']} {fee['charged']:.2f} charged vs {fee['estimated']:.2f} estimated "
+                  f"({fee['variance']:+.2f}); reconciled against Airwallex's record")
         if r.status in DONE or (dry and r.status == "DRY_RUN_OK"):
             ok_ids.add(ob.id)
     print(f"not executed in this batch: {[o.id for o in s.obligations if o not in todo]}")

@@ -13,7 +13,10 @@ BEN = {"freight": {"beneficiary_id": "b1"}, "Supplier": {"beneficiary_id": "b2"}
 
 class FakeClient:
     def __init__(self, usd=10000.0, gbp=10000.0, quote_mult=1.0, lose_transfer_response=False,
-                 local_fee=2.25, final_status=None, flaky_transition=False, failure=None):
+                 local_fee=2.25, final_status=None, flaky_transition=False, failure=None,
+                 report_fee=True, hidden_debit=0.0):
+        self.report_fee = report_fee    # does the transfer record carry amount_payer_pays?
+        self.hidden_debit = hidden_debit  # money that leaves the wallet without appearing on the transfer
         self.tstatus = "SCHEDULED"
         self.failure = failure      # e.g. {"status": "FAILED", "failure_type": ..., "failure_reason": ...}
         self.flaky = flaky_transition
@@ -36,7 +39,10 @@ class FakeClient:
         if path.startswith("/api/v1/transfers/"):
             if self.failure:
                 return {"id": "t1", **self.failure}
-            return {"id": "t1", "status": self.final_status or self.tstatus}
+            t = {"id": "t1", "status": self.final_status or self.tstatus}
+            if self.report_fee and self.transfers:
+                t["amount_payer_pays"] = self.transfers[-1]["amount"] + self.local_fee
+            return t
         return {"items": []}
 
     def post(self, path, body, **kw):
@@ -59,8 +65,9 @@ class FakeClient:
             self.calls.append(("POST", path, body))
             if not any(t["request_id"] == request_id for t in self.transfers):
                 if not self.failure:    # a failed payout leaves (or returns) the money in the wallet
-                    self.bal[body["source_currency"]] -= body["transfer_amount"] + self.local_fee
-                self.transfers.append({"id": "t1", "request_id": request_id, "status": "PROCESSING"})
+                    self.bal[body["source_currency"]] -= body["transfer_amount"] + self.local_fee + self.hidden_debit
+                self.transfers.append({"id": "t1", "request_id": request_id, "status": "PROCESSING",
+                                       "amount": body["transfer_amount"]})
             if self.lose:
                 self.lose = False
                 found = lookup(request_id)
@@ -143,11 +150,27 @@ def test_reconciliation_matches_when_fee_is_modelled(tmp_path):
     assert r.detail["reconciliation"]["actual_debit"]["GBP"] == pytest.approx(4202.25)
 
 
-def test_reconciliation_flags_an_unmodelled_fee(tmp_path):
+def test_reconciliation_flags_an_unmodelled_fee_when_airwallex_reports_none(tmp_path):
+    c = FakeClient(local_fee=5.0, report_fee=False)
+    s, p, ob, ex = setup(tmp_path, c, dry_run=False)
+    rec = ex.execute(ob, p.decisions["freight"]).detail["reconciliation"]
+    assert rec["ok"] is False and rec["diff"]["GBP"] == pytest.approx(2.75) and rec["checked_against"] == "plan"
+
+
+def test_a_fee_that_differs_from_the_estimate_is_reported_not_a_mismatch(tmp_path):
+    """Seen live: the sandbox SWIFT EUR fee floats. Balances that match Airwallex's own record reconcile."""
     c = FakeClient(local_fee=5.0)
     s, p, ob, ex = setup(tmp_path, c, dry_run=False)
     rec = ex.execute(ob, p.decisions["freight"]).detail["reconciliation"]
-    assert rec["ok"] is False and rec["diff"]["GBP"] == pytest.approx(2.75)
+    assert rec["ok"] is True and rec["checked_against"] == "airwallex"
+    assert rec["fee"] == {"ccy": "GBP", "estimated": 2.25, "charged": 5.0, "variance": 2.75}
+
+
+def test_money_the_transfer_record_does_not_explain_is_a_mismatch(tmp_path):
+    c = FakeClient(hidden_debit=1.0)
+    s, p, ob, ex = setup(tmp_path, c, dry_run=False)
+    rec = ex.execute(ob, p.decisions["freight"]).detail["reconciliation"]
+    assert rec["ok"] is False and rec["diff"]["GBP"] == pytest.approx(1.0) and rec["fee"]["variance"] == 0
 
 
 def test_status_comes_from_re_reading_the_transfer(tmp_path):
@@ -187,6 +210,24 @@ def test_better_quote_than_plan_is_not_a_reconciliation_error(tmp_path):
     ex = Executor(c, Ledger(tmp_path / "l.json"), {ob.payee: {"beneficiary_id": "b1"}}, dry_run=False)
     r = ex.execute(ob, p.decisions["freight"])
     assert r.status == "PAID_SIM" and r.detail["reconciliation"]["ok"] is True
+
+def test_converted_payout_with_a_higher_fee_than_estimated_reconciles(tmp_path):
+    """The live SWIFT case: the conversion buys amount + estimated fee, Airwallex charges more,
+    and the shortfall comes from the obligation-currency wallet. That is explained, not a mismatch."""
+    pol = load_policy(ROOT / "policy.json")
+    s = with_confidence(load_scenario(ROOT / "tests" / "fixtures" / "scenario.json"), "customer_a", 0.9)
+    s.wallets = {"USD": 20000.0, "GBP": 0.0, "EUR": 0.0}
+    p = plan(s, pol)
+    ob = next(o for o in s.obligations if o.id == "freight")
+    d = p.decisions["freight"]
+    assert d.draw.converted > 0
+    c = FakeClient(local_fee=pol.local_fee["GBP"] + 0.68)
+    c.bal["GBP"] = 5.0                        # a little GBP already in the wallet covers the shortfall
+    ex = Executor(c, Ledger(tmp_path / "l.json"), {ob.payee: {"beneficiary_id": "b1"}}, dry_run=False)
+    rec = ex.execute(ob, d).detail["reconciliation"]
+    assert rec["ok"] is True and rec["fee"]["variance"] == pytest.approx(0.68)
+    assert rec["actual_debit"]["GBP"] == pytest.approx(0.68)
+
 
 FAILED = {"status": "FAILED", "failure_type": "BENEFICIARY_ACCOUNT_INVALID", "failure_reason": "account closed"}
 

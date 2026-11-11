@@ -31,9 +31,11 @@ Every threshold lives in `policy.json` (tiers, penalties, spread, SWIFT fees) or
    their cost that settled cash cannot cover is their *forecast-reliant spend*.
 3. **Gate** with the rules below.
 
-Payout fees: SWIFT is a flat EUR 12.85. LOCAL was observed at GBP 2.25 on a GBP 4,200 sandbox payout (the guide says LOCAL is free);
-only GBP is configured (`local_fee` in `policy.json`), other currencies default to 0 until observed. The executor reconciles planned vs
-actual debits after every payout, so a wrong fee shows up as a mismatch instead of a silent error.
+Payout fees are *estimates* for planning: SWIFT EUR 12.85 (the guide's figure), LOCAL GBP 2.25 and USD 3.00 (observed; the
+guide says LOCAL is free). Real fees float: the sandbox charged SWIFT EUR 13.37 and later 13.53, and LOCAL GBP 2.25 and later 2.26.
+So after every payout the executor reconciles the balance movement against the transfer's own `amount_payer_pays`, not
+against the estimate. A fee that differs from the estimate is reported (`fee.variance`); a mismatch means money moved that
+Airwallex's record does not explain. If a transfer carries no `amount_payer_pays`, the check falls back to the plan.
 
 Priority and penalty: `operations_stop` 1,000,000 | `time_sensitive` 50,000 | `important` 10,000 | `deferrable` 500.
 
