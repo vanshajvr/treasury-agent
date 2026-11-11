@@ -1,0 +1,11 @@
+# Allowlist: only what the demo server needs. Keeps .env, ledgers and beneficiaries out of the build context.
+*
+!requirements.txt
+!server.py
+!scenario.json
+!policy.json
+!evidence.json
+!treasury/
+!web/
+**/__pycache__
+**/*.pyc
