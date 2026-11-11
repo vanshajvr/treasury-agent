@@ -46,8 +46,10 @@ def make_handler(service: DemoService, trust_proxy: bool):
             self._send(status, json.dumps(data).encode(), "application/json")
 
         def _client(self) -> str:
+            # The load balancer appends the address it saw, so only the LAST entry is trustworthy;
+            # anything before it was written by the visitor and could be changed per request.
             if trust_proxy and self.headers.get("X-Forwarded-For"):
-                return self.headers["X-Forwarded-For"].split(",")[0].strip()
+                return self.headers["X-Forwarded-For"].split(",")[-1].strip()
             return self.client_address[0]
 
         def do_GET(self) -> None:  # noqa: N802

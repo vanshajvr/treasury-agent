@@ -132,3 +132,22 @@ def test_server_does_not_serve_outside_web(base_url, path):
 def test_server_rejects_bad_bodies(base_url):
     assert fetch(base_url + "/api/story", b"not json")[0] == 400
     assert fetch(base_url + "/api/story", b"x" * 9000)[0] == 413
+
+
+def test_spoofed_forwarded_for_cannot_dodge_the_rate_limit():
+    svc = service(per_ip_per_min=2)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(svc, trust_proxy=True))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{httpd.server_address[1]}/api/story"
+    try:
+        codes = []
+        for fake in ("1.1.1.1", "2.2.2.2", "3.3.3.3"):          # visitor rotates the first entry; proxy appends the real one
+            req = urllib.request.Request(url, data=b'{"email": "hi"}', headers={"X-Forwarded-For": f"{fake}, 203.0.113.7"})
+            try:
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    codes.append(r.status)
+            except urllib.error.HTTPError as e:
+                codes.append(e.code)
+        assert codes == [200, 200, 429]
+    finally:
+        httpd.shutdown()
