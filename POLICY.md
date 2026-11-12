@@ -1,4 +1,4 @@
-# Treasury Controller Policy
+# Mandate-Bound Treasury Controller: Policy
 
 Every threshold lives in `policy.json` (tiers, penalties, spread, SWIFT fees) or `scenario.json`
 (mandate, reserve floor, obligations, forecasts). Nothing below is decided by a prompt.
