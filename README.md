@@ -1,4 +1,6 @@
-# Mandate-Bound Treasury Controller
+# Settled
+
+*An AI treasury agent that pays only from settled cash, never from a forecast.*
 
 An agent that runs a company's multi-currency cash for 72 hours on Airwallex. It decides which bills to pay, when, and
 from which currency, and it stops to ask a person when the money or the facts are not solid.
